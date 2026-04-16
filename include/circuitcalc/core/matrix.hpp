@@ -4,8 +4,6 @@
 
 #include <cstddef>
 
-namespace circuitcalc {
-
 /// Dense row-major matrix (placeholder for MNA assembly / solve).
 class Matrix {
 public:
@@ -28,5 +26,3 @@ private:
     std::size_t cols_{};
     double* data_{nullptr};
 };
-
-}  // namespace circuitcalc

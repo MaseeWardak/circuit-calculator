@@ -2,15 +2,9 @@
 
 #include <stdexcept>
 
-namespace circuitcalc {
-
-namespace {
-
-int max_node_index(int a, int b) {
+static int max_node_index(int a, int b) {
     return a > b ? a : b;
 }
-
-}  // namespace
 
 void Netlist::set_node_count(std::size_t count) {
     if (count == 0) {
@@ -90,5 +84,3 @@ void Netlist::clear() {
     num_current_sources_ = 0;
     num_voltage_sources_ = 0;
 }
-
-}  // namespace circuitcalc

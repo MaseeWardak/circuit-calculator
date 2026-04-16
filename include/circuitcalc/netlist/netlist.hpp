@@ -2,8 +2,6 @@
 
 #include <cstddef>
 
-namespace circuitcalc {
-
 struct ResistorEntry {
     int node_a{};
     int node_b{};
@@ -55,5 +53,3 @@ private:
     VoltageSourceEntry voltage_sources_[kMaxVoltageSources];
     int num_voltage_sources_{0};
 };
-
-}  // namespace circuitcalc

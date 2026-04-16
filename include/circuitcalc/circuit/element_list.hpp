@@ -4,8 +4,6 @@
 
 #include <cstddef>
 
-namespace circuitcalc {
-
 /// One node in a singly linked, hand-rolled list of elements.
 struct ElementNode {
     CircuitElement* element{nullptr};
@@ -54,5 +52,3 @@ private:
 inline void swap(ElementList& a, ElementList& b) noexcept {
     a.swap(b);
 }
-
-}  // namespace circuitcalc

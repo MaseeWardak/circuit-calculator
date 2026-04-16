@@ -3,8 +3,6 @@
 #include <stdexcept>
 #include <utility>
 
-namespace circuitcalc {
-
 ElementList::~ElementList() {
     clear();
 }
@@ -84,10 +82,7 @@ void ElementList::clear() {
 }
 
 void ElementList::swap(ElementList& other) noexcept {
-    using std::swap;
-    swap(head_, other.head_);
-    swap(tail_, other.tail_);
-    swap(size_, other.size_);
+    std::swap(head_, other.head_);
+    std::swap(tail_, other.tail_);
+    std::swap(size_, other.size_);
 }
-
-}  // namespace circuitcalc

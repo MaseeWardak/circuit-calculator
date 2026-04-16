@@ -2,8 +2,6 @@
 
 #include <stdexcept>
 
-namespace circuitcalc {
-
 Matrix::Matrix(std::size_t rows, std::size_t cols) : rows_(rows), cols_(cols) {
     const std::size_t n = rows * cols;
     data_ = new double[n];
@@ -31,5 +29,3 @@ void Matrix::solve_gaussian(Matrix& a, double* b, std::size_t n) {
     (void)n;
     throw std::logic_error("Matrix::solve_gaussian not implemented");
 }
-
-}  // namespace circuitcalc

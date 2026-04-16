@@ -1,7 +1,5 @@
 #pragma once
 
-namespace circuitcalc {
-
 /// Base type for anything that can sit in an `ElementList` (hand-rolled list of devices).
 class CircuitElement {
 public:
@@ -66,5 +64,3 @@ private:
     int node_minus_{};
     double volts_{};
 };
-
-}  // namespace circuitcalc
