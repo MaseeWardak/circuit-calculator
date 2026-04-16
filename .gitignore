@@ -39,3 +39,36 @@
 
 # debug information files
 *.dwo
+
+# --- CMake / local build trees (do not commit) ---
+build/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeScripts/
+Testing/
+_deps/
+
+# CMake user presets (may contain machine-specific paths)
+CMakeUserPresets.json
+
+# Ninja
+.ninja_deps
+.ninja_log
+rules.ninja
+
+# Visual Studio / MSBuild CMake
+.vs/
+*.vcxproj*
+*.sln
+x64/
+x86/
+[Dd]ebug/
+[Rr]elease/
+
+# clangd / language server cache
+.cache/
+
+# OS junk
+.DS_Store
+Thumbs.db

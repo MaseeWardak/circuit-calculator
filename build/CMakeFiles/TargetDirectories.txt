@@ -1,4 +1,0 @@
-D:/Coding Projects/Circuit Calculator/V1/circuit-calculator/build/CMakeFiles/circuitcalc.dir
-D:/Coding Projects/Circuit Calculator/V1/circuit-calculator/build/CMakeFiles/circuitcalc_cli.dir
-D:/Coding Projects/Circuit Calculator/V1/circuit-calculator/build/CMakeFiles/edit_cache.dir
-D:/Coding Projects/Circuit Calculator/V1/circuit-calculator/build/CMakeFiles/rebuild_cache.dir

@@ -1,3 +1,0 @@
-"C:\Program Files\CMake\bin\cmake.exe" -E rm -f CMakeFiles\circuitcalc_cli.dir/objects.a
-"D:\Coding Projects\mingw64\bin\ar.exe" qc CMakeFiles\circuitcalc_cli.dir/objects.a @CMakeFiles\circuitcalc_cli.dir\objects1.rsp
-"D:\Coding Projects\mingw64\bin\c++.exe" -g -Wl,--whole-archive CMakeFiles\circuitcalc_cli.dir/objects.a -Wl,--no-whole-archive -o circuitcalc_cli.exe -Wl,--out-implib,libcircuitcalc_cli.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\circuitcalc_cli.dir\linkLibs.rsp
