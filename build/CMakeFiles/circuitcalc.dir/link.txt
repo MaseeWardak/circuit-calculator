@@ -1,0 +1,2 @@
+"D:\Coding Projects\mingw64\bin\ar.exe" qc libcircuitcalc.a CMakeFiles/circuitcalc.dir/src/circuit/element_list.cpp.obj CMakeFiles/circuitcalc.dir/src/core/matrix.cpp.obj CMakeFiles/circuitcalc.dir/src/netlist/netlist.cpp.obj CMakeFiles/circuitcalc.dir/src/analysis/dc_solver.cpp.obj
+"D:\Coding Projects\mingw64\bin\ranlib.exe" libcircuitcalc.a
