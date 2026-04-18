@@ -44,7 +44,8 @@ export default function Palette({ selected, onSelect }: Props) {
           <li><kbd>R</kbd> → rotate 0→90→180→270</li>
           <li><kbd>Click</kbd> pin → start wire</li>
           <li><kbd>Right-click</kbd> pin → set GND</li>
-          <li><kbd>Click</kbd> wire → delete wire</li>
+          <li><kbd>Click</kbd> wire → delete it</li>
+          <li><kbd>Click</kbd> ○ junction → continue wire</li>
           <li><kbd>Del</kbd> → delete selected</li>
           <li><kbd>Esc</kbd> → cancel</li>
         </ul>

@@ -3,6 +3,19 @@ import type { CircuitInput } from '../types/circuit';
 import { getPin2, gk } from './utils';
 
 // ---------------------------------------------------------------------------
+// Geometry helper
+// ---------------------------------------------------------------------------
+
+/** Returns true if grid point `pt` lies exactly on the segment from `a` to `b`. */
+function onSegment(a: { x: number; y: number }, b: { x: number; y: number }, pt: { x: number; y: number }): boolean {
+  // Cross-product zero ⟹ collinear
+  if ((b.x - a.x) * (pt.y - a.y) !== (b.y - a.y) * (pt.x - a.x)) return false;
+  // Within bounding box
+  return pt.x >= Math.min(a.x, b.x) && pt.x <= Math.max(a.x, b.x)
+      && pt.y >= Math.min(a.y, b.y) && pt.y <= Math.max(a.y, b.y);
+}
+
+// ---------------------------------------------------------------------------
 // Union-Find (path-compressed, rank-based)
 // ---------------------------------------------------------------------------
 function makeUF() {
@@ -59,6 +72,53 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
 
   // Union wire endpoints
   for (const w of wires) uf.union(gk(w.from), gk(w.to));
+
+  // Wire-on-wire T-junctions: if a wire endpoint lands exactly on another wire
+  // segment (not at its endpoints) the two wires share a node there.
+  for (const wa of wires) {
+    for (const wb of wires) {
+      if (wa === wb) continue;
+      const aFromKey = gk(wa.from), aToKey = gk(wa.to);
+      const bFromKey = gk(wb.from), bToKey = gk(wb.to);
+      // Only true T-junctions: endpoint of wa that is NOT already an endpoint of wb
+      if (onSegment(wb.from, wb.to, wa.from) && aFromKey !== bFromKey && aFromKey !== bToKey)
+        uf.union(aFromKey, bFromKey);
+      if (onSegment(wb.from, wb.to, wa.to)   && aToKey   !== bFromKey && aToKey   !== bToKey)
+        uf.union(aToKey,   bFromKey);
+    }
+  }
+
+  // Component-pin T-junctions:
+  // A pin that sits in the MIDDLE of a wire segment (not at an endpoint) should
+  // join that wire's net.  However, if applying this rule would put both pins of
+  // the same component into the same net (short-circuiting it), we skip it —
+  // that means the user has placed the component across a single wire, which is
+  // unresolvable without them breaking the wire into two segments.
+  for (const c of components) {
+    const p1Key = gk(c.pin1), p2Key = gk(getPin2(c));
+
+    // Wires where the pin lies strictly inside — not at an endpoint.
+    const p1Wires = wires.filter(w =>
+      onSegment(w.from, w.to, c.pin1) && gk(w.from) !== p1Key && gk(w.to) !== p1Key
+    );
+    const p2Wires = wires.filter(w =>
+      onSegment(w.from, w.to, getPin2(c)) && gk(w.from) !== p2Key && gk(w.to) !== p2Key
+    );
+
+    if (p1Wires.length === 0 && p2Wires.length === 0) continue;
+
+    // Would applying T-junctions merge pin1 and pin2 into the same net?
+    const p1Roots = new Set([uf.find(p1Key), ...p1Wires.map(w => uf.find(gk(w.from)))]);
+    const p2Roots = new Set([uf.find(p2Key), ...p2Wires.map(w => uf.find(gk(w.from)))]);
+    const wouldShort = [...p1Roots].some(r => p2Roots.has(r));
+
+    if (!wouldShort) {
+      for (const w of p1Wires) uf.union(p1Key, gk(w.from));
+      for (const w of p2Wires) uf.union(p2Key, gk(w.from));
+    }
+    // If wouldShort: skip — the component sits across a single wire.
+    // The user must break the wire into two segments to get distinct nodes.
+  }
 
   // Assign integer node numbers (ground root → 0)
   const nodeMap = new Map<string, number>();
