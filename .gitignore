@@ -72,3 +72,11 @@ x86/
 # OS junk
 .DS_Store
 Thumbs.db
+
+# --- Web / Node.js ----------------------------------------------------------
+web/node_modules/
+web/dist/
+web/.vite/
+
+# WASM build output (built separately; copy to web/public/wasm/ when needed)
+build-wasm/
