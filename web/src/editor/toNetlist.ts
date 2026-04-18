@@ -1,16 +1,18 @@
 import type { Schematic } from './types';
 import type { CircuitInput } from '../types/circuit';
-import { getPin2, gk } from './utils';
+import { getPin2, getCtrlPin1, getCtrlPin2, hasCtrlPins, allPinsOf, gk } from './utils';
 
 // ---------------------------------------------------------------------------
 // Geometry helper
 // ---------------------------------------------------------------------------
 
 /** Returns true if grid point `pt` lies exactly on the segment from `a` to `b`. */
-function onSegment(a: { x: number; y: number }, b: { x: number; y: number }, pt: { x: number; y: number }): boolean {
-  // Cross-product zero ⟹ collinear
+function onSegment(
+  a:  { x: number; y: number },
+  b:  { x: number; y: number },
+  pt: { x: number; y: number },
+): boolean {
   if ((b.x - a.x) * (pt.y - a.y) !== (b.y - a.y) * (pt.x - a.x)) return false;
-  // Within bounding box
   return pt.x >= Math.min(a.x, b.x) && pt.x <= Math.max(a.x, b.x)
       && pt.y >= Math.min(a.y, b.y) && pt.y <= Math.max(a.y, b.y);
 }
@@ -42,45 +44,42 @@ function makeUF() {
 
 // ---------------------------------------------------------------------------
 // Core conversion logic
-// Returns the solver netlist AND a map from every pin grid-key → node ID,
-// which the canvas uses to draw node voltage overlays.
 // ---------------------------------------------------------------------------
 export interface NetlistWithNodeMap {
   netlist:   CircuitInput;
-  /** gk(pin) → node ID for every component pin (and wire endpoint). */
+  /** gk(pin) → node ID for every component pin and wire endpoint. */
   pinToNode: Map<string, number>;
 }
 
 export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWithNodeMap {
-  const { components, wires, groundPoint } = schematic;
+  const { components, wires, labels, groundPoint } = schematic;
 
   if (components.length === 0)
     throw new Error('No components placed. Add at least one element to the canvas.');
 
   const uf = makeUF();
 
-  // Seed every pin
+  // 1. Seed every component pin (including ctrl pins for G/E)
   for (const c of components) {
-    uf.find(gk(c.pin1));
-    uf.find(gk(getPin2(c)));
+    for (const pin of allPinsOf(c)) uf.find(gk(pin));
   }
   // Seed wire endpoints
   for (const w of wires) {
     uf.find(gk(w.from));
     uf.find(gk(w.to));
   }
+  // Seed label anchor points
+  for (const lbl of labels) uf.find(gk(lbl.point));
 
-  // Union wire endpoints
+  // 2. Union wire endpoints
   for (const w of wires) uf.union(gk(w.from), gk(w.to));
 
-  // Wire-on-wire T-junctions: if a wire endpoint lands exactly on another wire
-  // segment (not at its endpoints) the two wires share a node there.
+  // 3. Wire-on-wire T-junctions
   for (const wa of wires) {
     for (const wb of wires) {
       if (wa === wb) continue;
       const aFromKey = gk(wa.from), aToKey = gk(wa.to);
       const bFromKey = gk(wb.from), bToKey = gk(wb.to);
-      // Only true T-junctions: endpoint of wa that is NOT already an endpoint of wb
       if (onSegment(wb.from, wb.to, wa.from) && aFromKey !== bFromKey && aFromKey !== bToKey)
         uf.union(aFromKey, bFromKey);
       if (onSegment(wb.from, wb.to, wa.to)   && aToKey   !== bFromKey && aToKey   !== bToKey)
@@ -88,40 +87,56 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
     }
   }
 
-  // Component-pin T-junctions:
-  // A pin that sits in the MIDDLE of a wire segment (not at an endpoint) should
-  // join that wire's net.  However, if applying this rule would put both pins of
-  // the same component into the same net (short-circuiting it), we skip it —
-  // that means the user has placed the component across a single wire, which is
-  // unresolvable without them breaking the wire into two segments.
+  // 4. Component-pin T-junctions (with short-circuit guard).
+  //    Applied to ALL electrically significant pins (incl. ctrl pins for G/E).
   for (const c of components) {
-    const p1Key = gk(c.pin1), p2Key = gk(getPin2(c));
+    const pins = allPinsOf(c);
+    const pinKeys = pins.map(p => gk(p));
 
-    // Wires where the pin lies strictly inside — not at an endpoint.
-    const p1Wires = wires.filter(w =>
-      onSegment(w.from, w.to, c.pin1) && gk(w.from) !== p1Key && gk(w.to) !== p1Key
+    // For each pin: which wire segments contain it strictly inside?
+    const pinWires = pins.map((pin, pi) =>
+      wires.filter(w =>
+        onSegment(w.from, w.to, pin)
+          && gk(w.from) !== pinKeys[pi]
+          && gk(w.to)   !== pinKeys[pi]
+      )
     );
-    const p2Wires = wires.filter(w =>
-      onSegment(w.from, w.to, getPin2(c)) && gk(w.from) !== p2Key && gk(w.to) !== p2Key
-    );
 
-    if (p1Wires.length === 0 && p2Wires.length === 0) continue;
+    const anyTJunction = pinWires.some(pw => pw.length > 0);
+    if (!anyTJunction) continue;
 
-    // Would applying T-junctions merge pin1 and pin2 into the same net?
-    const p1Roots = new Set([uf.find(p1Key), ...p1Wires.map(w => uf.find(gk(w.from)))]);
-    const p2Roots = new Set([uf.find(p2Key), ...p2Wires.map(w => uf.find(gk(w.from)))]);
-    const wouldShort = [...p1Roots].some(r => p2Roots.has(r));
+    // Would merging short-circuit any pair of this component's pins?
+    const pinRoots = pins.map((pin, pi) => {
+      const s = new Set([uf.find(pinKeys[pi])]);
+      for (const w of pinWires[pi]) s.add(uf.find(gk(w.from)));
+      return s;
+    });
+
+    let wouldShort = false;
+    for (let a = 0; a < pinRoots.length && !wouldShort; a++)
+      for (let b = a + 1; b < pinRoots.length && !wouldShort; b++)
+        wouldShort = [...pinRoots[a]].some(r => pinRoots[b].has(r));
 
     if (!wouldShort) {
-      for (const w of p1Wires) uf.union(p1Key, gk(w.from));
-      for (const w of p2Wires) uf.union(p2Key, gk(w.from));
+      for (let pi = 0; pi < pins.length; pi++)
+        for (const w of pinWires[pi]) uf.union(pinKeys[pi], gk(w.from));
     }
-    // If wouldShort: skip — the component sits across a single wire.
-    // The user must break the wire into two segments to get distinct nodes.
   }
 
-  // Assign integer node numbers (ground root → 0)
-  const nodeMap = new Map<string, number>();
+  // 5. Wire-label net merging: any two labels with the same text get unioned.
+  const labelGroups = new Map<string, string[]>();
+  for (const lbl of labels) {
+    const trimmed = lbl.text.trim();
+    if (!trimmed) continue;
+    if (!labelGroups.has(trimmed)) labelGroups.set(trimmed, []);
+    labelGroups.get(trimmed)!.push(gk(lbl.point));
+  }
+  for (const [, keys] of labelGroups) {
+    for (let i = 1; i < keys.length; i++) uf.union(keys[0], keys[i]);
+  }
+
+  // 6. Assign integer node numbers (ground root → 0)
+  const nodeMap    = new Map<string, number>();
   const groundRoot = groundPoint
     ? uf.find(gk(groundPoint))
     : uf.find(gk(components[0].pin1));
@@ -129,18 +144,20 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
 
   let nextNode = 1;
   for (const c of components) {
-    for (const pin of [c.pin1, getPin2(c)]) {
+    for (const pin of allPinsOf(c)) {
       const root = uf.find(gk(pin));
       if (!nodeMap.has(root)) nodeMap.set(root, nextNode++);
     }
   }
+  for (const lbl of labels) {
+    const root = uf.find(gk(lbl.point));
+    if (!nodeMap.has(root)) nodeMap.set(root, nextNode++);
+  }
 
-  // Helper: grid-key → node ID
   const nodeOfKey = (key: string): number | undefined => {
     const root = uf.find(key);
     return nodeMap.get(root);
   };
-
   const nodeOf = (pin: { x: number; y: number }): number => {
     const n = nodeOfKey(gk(pin));
     if (n === undefined)
@@ -151,32 +168,39 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
     return n;
   };
 
-  const branches = components.map(c => ({
-    type:  c.type,
-    n1:    nodeOf(c.pin1),
-    n2:    nodeOf(getPin2(c)),
-    value: c.value,
-  }));
+  // 7. Generate branches (skip OC — they have no branch in the netlist)
+  const branches = components
+    .filter(c => c.type !== 'OC')
+    .map(c => {
+      const base = {
+        type:  c.type as import('../types/circuit').BranchType,
+        n1:    nodeOf(c.pin1),
+        n2:    nodeOf(getPin2(c)),
+        value: c.value,
+      };
+      if (hasCtrlPins(c.type)) {
+        return {
+          ...base,
+          nc1: nodeOf(getCtrlPin1(c)),
+          nc2: nodeOf(getCtrlPin2(c)),
+        };
+      }
+      return base;
+    });
 
   if (!groundPoint)
     console.warn('[toNetlist] No ground set – auto-assigned node 0 to first component pin.');
 
-  // Build pinToNode for every component pin and wire endpoint
+  // 8. Build pinToNode map for canvas overlays
   const pinToNode = new Map<string, number>();
-  for (const c of components) {
-    for (const pin of [c.pin1, getPin2(c)]) {
-      const key = gk(pin);
-      const n = nodeOfKey(key);
-      if (n !== undefined) pinToNode.set(key, n);
-    }
-  }
-  for (const w of wires) {
-    for (const pt of [w.from, w.to]) {
-      const key = gk(pt);
-      const n = nodeOfKey(key);
-      if (n !== undefined) pinToNode.set(key, n);
-    }
-  }
+  const recordPin = (pt: { x: number; y: number }) => {
+    const key = gk(pt);
+    const n = nodeOfKey(key);
+    if (n !== undefined) pinToNode.set(key, n);
+  };
+  for (const c of components) for (const pin of allPinsOf(c)) recordPin(pin);
+  for (const w of wires) { recordPin(w.from); recordPin(w.to); }
+  for (const lbl of labels) recordPin(lbl.point);
 
   return {
     netlist:   { node_count: nextNode, branches },

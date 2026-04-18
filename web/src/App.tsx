@@ -2,32 +2,32 @@ import { useState } from 'react';
 import EditorCanvas from './editor/EditorCanvas';
 import Palette      from './editor/Palette';
 import ResultsPanel from './components/ResultsPanel';
-import type { BranchType, Schematic } from './editor/types';
-import { schematicToNetlist, schematicToNetlistWithNodeMap } from './editor/toNetlist';
+import type { ToolType, Schematic } from './editor/types';
+import { schematicToNetlistWithNodeMap } from './editor/toNetlist';
 import { solve } from './lib/solver';
 import type { Branch, SolveResult } from './types/circuit';
 
 const EMPTY_SCHEMATIC: Schematic = {
-  components: [],
-  wires:      [],
+  components:  [],
+  wires:       [],
+  labels:      [],
   groundPoint: null,
 };
 
 export default function App() {
   const [schematic, setSchematic]     = useState<Schematic>(EMPTY_SCHEMATIC);
-  const [pendingType, setPendingType] = useState<BranchType | null>(null);
+  const [pendingType, setPendingType] = useState<ToolType | null>(null);
   const [result, setResult]           = useState<SolveResult | null>(null);
   const [solving, setSolving]         = useState(false);
   const [solveError, setSolveError]   = useState<string | null>(null);
-  const [showNetlist, setShowNetlist] = useState(false);
+  const [netlistBranches, setNetlistBranches] = useState<Branch[]>([]);
 
   // Node overlay state — populated after a successful solve, cleared on change
-  const [pinToNode, setPinToNode]     = useState<Map<string, number> | null>(null);
-  const [nodeVoltages, setNodeVoltages] = useState<number[] | null>(null);
+  const [pinToNode, setPinToNode]         = useState<Map<string, number> | null>(null);
+  const [nodeVoltages, setNodeVoltages]   = useState<number[] | null>(null);
 
   const handleSchematicChange = (s: Schematic) => {
     setSchematic(s);
-    // Clear overlays when the user edits the circuit
     setPinToNode(null);
     setNodeVoltages(null);
     setResult(null);
@@ -42,6 +42,8 @@ export default function App() {
     setNodeVoltages(null);
     try {
       const { netlist, pinToNode: ptn } = schematicToNetlistWithNodeMap(schematic);
+      // Capture real node assignments for the results panel
+      setNetlistBranches(netlist.branches);
       const r = await solve(netlist);
       setResult(r);
       if (r.ok) {
@@ -62,33 +64,43 @@ export default function App() {
     setPendingType(null);
     setPinToNode(null);
     setNodeVoltages(null);
+    setNetlistBranches([]);
   };
 
-  // Branches in netlist order for the ResultsPanel
-  const netlistBranches: Branch[] = schematic.components.map(c => ({
-    type: c.type, n1: 0, n2: 0, value: c.value,
-  }));
-
-  let netlistJson: string | null = null;
-  if (showNetlist) {
-    try {
-      netlistJson = JSON.stringify(schematicToNetlist(schematic), null, 2);
-    } catch {
-      netlistJson = null;
-    }
-  }
-
+  const PENDING_LABELS: Record<string, string> = {
+    R: 'Resistor', V: 'Voltage Source', I: 'Current Source',
+    G: 'VCCS', E: 'VCVS', F: 'CCCS', H: 'CCVS',
+    OC: 'Open Circuit', L: 'Net Label',
+  };
   const hintText = pendingType
-    ? `Placing ${pendingType === 'R' ? 'Resistor' : pendingType === 'V' ? 'Voltage Source' : 'Current Source'} — click canvas · R to cycle rotation · Shift+click to keep placing · Esc to cancel`
+    ? pendingType === 'L'
+      ? 'Placing Net Label — click canvas · Shift+click to keep placing · Esc to cancel'
+      : `Placing ${PENDING_LABELS[pendingType] ?? pendingType} — click canvas · R to rotate · Shift+click to keep placing · Esc to cancel`
     : 'Select a component from the palette, or click a pin to start a wire';
 
   return (
     <div className="app">
       <header className="app-header">
-        <span className="header-icon">⚡</span>
-        <div>
-          <h1>Circuit Calculator</h1>
-          <p className="subtitle">DC analysis — resistors, voltage &amp; current sources</p>
+        <div className="header-left">
+          <h1>Mr Goose Circuit Calculator</h1>
+          <p className="subtitle">DC analysis — R, V, I, VCCS, VCVS, CCCS, CCVS &amp; net labels</p>
+        </div>
+        <div className="header-actions">
+          <button
+            className="header-btn danger"
+            onClick={handleClear}
+            title="Clear canvas"
+          >
+            Clear
+          </button>
+          <button
+            className="header-btn solve"
+            onClick={handleSolve}
+            disabled={solving || schematic.components.length === 0}
+            title="Run DC analysis"
+          >
+            {solving ? 'Solving…' : 'Solve'}
+          </button>
         </div>
       </header>
 
@@ -100,27 +112,6 @@ export default function App() {
 
         {/* ---- Centre: canvas ---- */}
         <section className="canvas-area">
-          <div className="canvas-toolbar">
-            <span className="toolbar-hint">{hintText}</span>
-            <div className="toolbar-actions">
-              <button
-                className="toolbar-btn"
-                onClick={() => setShowNetlist(s => !s)}
-                title="Toggle netlist JSON view"
-              >
-                {showNetlist ? 'Hide JSON' : 'Show JSON'}
-              </button>
-              <button className="toolbar-btn danger" onClick={handleClear}>Clear</button>
-              <button
-                className="solve-btn-sm"
-                onClick={handleSolve}
-                disabled={solving || schematic.components.length === 0}
-              >
-                {solving ? 'Solving…' : '⚡ Solve'}
-              </button>
-            </div>
-          </div>
-
           <EditorCanvas
             schematic={schematic}
             onChange={handleSchematicChange}
@@ -128,13 +119,8 @@ export default function App() {
             onPendingTypeChange={setPendingType}
             nodeHighlights={pinToNode}
             nodeVoltages={nodeVoltages}
+            placementHint={hintText}
           />
-
-          {showNetlist && (
-            <pre className="netlist-preview">
-              {netlistJson ?? '// Cannot generate netlist — check circuit connections.'}
-            </pre>
-          )}
         </section>
 
         {/* ---- Right: results ---- */}

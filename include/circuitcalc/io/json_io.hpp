@@ -8,7 +8,12 @@
 /// JSON contract (both sides must match):
 ///
 /// INPUT  { "node_count": N,
-///          "branches": [{"type":"R"|"V"|"I","n1":int,"n2":int,"value":double}, ...] }
+///          "branches": [
+///            {"type":"R"|"V"|"I","n1":int,"n2":int,"value":double},
+///            {"type":"G"|"E","n1":int,"n2":int,"value":double,"nc1":int,"nc2":int},
+///            ...
+///          ]
+///        }
 ///
 /// OUTPUT { "ok": true,
 ///          "node_voltages": [v0, v1, ...],
@@ -19,10 +24,12 @@ struct ParsedCircuit {
     Netlist netlist;
 
     static constexpr int kMaxBranches =
-        Netlist::kMaxResistors + Netlist::kMaxCurrentSources + Netlist::kMaxVoltageSources;
+        Netlist::kMaxResistors + Netlist::kMaxCurrentSources + Netlist::kMaxVoltageSources +
+        Netlist::kMaxVccs      + Netlist::kMaxVcvs +
+        Netlist::kMaxCccs      + Netlist::kMaxCcvs;
 
-    char  branch_types[kMaxBranches];   // 'R', 'V', or 'I'
-    int   num_branches{0};
+    char branch_types[kMaxBranches];   // 'R', 'V', 'I', 'G', or 'E'
+    int  num_branches{0};
 };
 
 /// Parse JSON input string into a Netlist + branch-order record.
@@ -30,8 +37,7 @@ struct ParsedCircuit {
 ParsedCircuit parse_netlist_json(const char* json);
 
 /// Serialize a solved result back to JSON.
-std::string result_to_json(const DcAnalysisResult& result,
-                           const ParsedCircuit& circuit);
+std::string result_to_json(const DcAnalysisResult& result, const ParsedCircuit& circuit);
 
 /// Serialize an error message to JSON.
 std::string error_to_json(const std::string& msg);

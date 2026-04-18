@@ -8,14 +8,12 @@
 ///
 /// Sign conventions:
 ///  * `node_voltage[i]` is the potential at node `i` relative to node 0 (ground).
-///  * `resistor_current[k]` flows from `node_a` to `node_b` of the k-th resistor
-///    (positive when V(node_a) > V(node_b)).
-///  * `current_source_current[k]` is reported equal to the source's set value
-///    (current flows from `node_from` to `node_to` through the source).
-///  * `voltage_source_current[k]` follows SPICE convention: positive means
-///    current flowing from `+` to `-` through the source (i.e., entering the
-///    plus terminal from the external circuit). A source supplying power to
-///    the external circuit reports a negative value here.
+///  * `resistor_current[k]` flows from `node_a` to `node_b` (positive when V_a > V_b).
+///  * `current_source_current[k]` equals the source's set value (n_from → n_to).
+///  * `voltage_source_current[k]` — SPICE convention: positive = current entering the
+///    plus terminal from the external circuit (negative if source is supplying power).
+///  * `vccs_current[k]` = gm * (V_ctrl+ − V_ctrl−), flowing n_out_from → n_out_to.
+///  * `vcvs_current[k]` — SPICE convention, same as voltage_source_current.
 struct DcAnalysisResult {
     static constexpr std::size_t kMaxNodes = 256;
 
@@ -30,4 +28,16 @@ struct DcAnalysisResult {
 
     int num_voltage_sources{0};
     double voltage_source_current[Netlist::kMaxVoltageSources]{};
+
+    int num_vccs{0};
+    double vccs_current[Netlist::kMaxVccs]{};
+
+    int num_vcvs{0};
+    double vcvs_current[Netlist::kMaxVcvs]{};
+
+    int num_cccs{0};
+    double cccs_current[Netlist::kMaxCccs]{};
+
+    int num_ccvs{0};
+    double ccvs_current[Netlist::kMaxCcvs]{};
 };
