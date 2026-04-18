@@ -84,6 +84,15 @@ export default function ResultsPanel({ result, branches }: Props) {
                   N{br.n1} →{' '}
                   <span className="node-dot" style={{ background: NODE_COLORS[br.n2 % NODE_COLORS.length] }} />
                   N{br.n2}
+                  {(br.type === 'G' || br.type === 'E' || br.type === 'F' || br.type === 'H') && br.nc1 !== undefined && br.nc2 !== undefined && (
+                    <span style={{ opacity: 0.7 }}>
+                      {' '}ctrl:{' '}
+                      <span className="node-dot" style={{ background: NODE_COLORS[br.nc1 % NODE_COLORS.length] }} />
+                      N{br.nc1}−
+                      <span className="node-dot" style={{ background: NODE_COLORS[br.nc2 % NODE_COLORS.length] }} />
+                      N{br.nc2}
+                    </span>
+                  )}
                 </td>
                 <td className="num-cell">{fmt(cur)} A</td>
               </tr>
