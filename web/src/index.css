@@ -262,7 +262,10 @@ input:focus, select:focus {
   font-size: .85rem;
 }
 .inline-editor-label { color: var(--muted); white-space: nowrap; font-size: .82rem; }
+.inline-editor-sep   { color: var(--border); user-select: none; }
 .inline-editor input  { width: 88px; }
+.inline-editor input[style*="width: 72"] { width: 72px; }
+.inline-editor input[style*="width: 64"] { width: 64px; }
 .inline-editor-unit   { color: var(--muted); }
 
 .inline-editor-rotate {

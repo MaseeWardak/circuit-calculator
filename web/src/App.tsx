@@ -70,12 +70,19 @@ export default function App() {
   const PENDING_LABELS: Record<string, string> = {
     R: 'Resistor', V: 'Voltage Source', I: 'Current Source',
     G: 'VCCS', E: 'VCVS', F: 'CCCS', H: 'CCVS',
-    OC: 'Open Circuit', L: 'Net Label',
+    OC: 'Open Circuit', A: 'Current Probe', L: 'Net Label',
+  };
+  const DEPENDENT_HINT: Record<string, string> = {
+    G: 'VCCS — place, then click again to set gm and the voltage control variable (e.g. Vx)',
+    E: 'VCVS — place, then click again to set gain μ and the voltage control variable (e.g. Vx)',
+    F: 'CCCS — place, then click again to set β and the current control variable (e.g. Ix)',
+    H: 'CCVS — place, then click again to set rm and the current control variable (e.g. Ix)',
   };
   const hintText = pendingType
     ? pendingType === 'L'
       ? 'Placing Net Label — click canvas · Shift+click to keep placing · Esc to cancel'
-      : `Placing ${PENDING_LABELS[pendingType] ?? pendingType} — click canvas · R to rotate · Shift+click to keep placing · Esc to cancel`
+      : DEPENDENT_HINT[pendingType]
+        ?? `Placing ${PENDING_LABELS[pendingType] ?? pendingType} — click canvas · R to rotate · Shift+click to keep placing · Esc to cancel`
     : 'Select a component from the palette, or click a pin to start a wire';
 
   return (

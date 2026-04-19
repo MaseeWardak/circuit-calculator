@@ -8,7 +8,7 @@ import {
   COMP_PX, GRID, NODE_COLORS, PIN_R,
 } from './constants';
 import {
-  allPinsOf, formatValue, getCtrlPin1, getCtrlPin2,
+  allPinsOf, formatValue,
   getPin2, gk, gridEq, hasCtrlPins, snapToGrid, toScreen,
 } from './utils';
 
@@ -74,8 +74,9 @@ function inlineEditorLabel(type: ComponentType): string {
     case 'G':  return 'gm (S)';
     case 'E':  return 'Gain μ (×)';
     case 'F':  return 'Gain β (×)';
-    case 'H':  return 'Transresistance rm';
+    case 'H':  return 'Gain rm (×)';
     case 'OC': return 'Open Circuit';
+    case 'A':  return 'Current Probe';
   }
 }
 
@@ -87,8 +88,9 @@ function inlineEditorUnit(type: ComponentType): string {
     case 'G':  return 'S';
     case 'E':  return '×';
     case 'F':  return '×';
-    case 'H':  return 'Ω';
+    case 'H':  return '×';
     case 'OC': return '';
+    case 'A':  return '';
   }
 }
 
@@ -499,16 +501,22 @@ export default function EditorCanvas({
       {editingId && !isActivelyDragging && (() => {
         const c = components.find(x => x.id === editingId);
         if (!c) return null;
-        const rotateSelected = () =>
+        const isDependent = c.type === 'G' || c.type === 'E' || c.type === 'F' || c.type === 'H';
+
+        const updateComp = (patch: Partial<typeof c>) =>
           onChange({ ...schematic, components: schematic.components.map(x =>
-            x.id === editingId ? { ...x, rotation: nextRotation(x.rotation) } : x
+            x.id === c.id ? { ...x, ...patch } : x
           )});
+
+        const rotateSelected = () => updateComp({ rotation: nextRotation(c.rotation) });
+
         return (
           <div className="inline-editor">
             <span className="inline-editor-label">{inlineEditorLabel(c.type)}</span>
-            {c.type !== 'OC' ? (
+            {c.type !== 'OC' && c.type !== 'A' ? (
               <>
                 <input
+                  key={`val-${c.id}`}
                   type="number" step="any"
                   defaultValue={c.value}
                   onBlur={e   => updateValue(c.id, e.target.value)}
@@ -517,11 +525,54 @@ export default function EditorCanvas({
                     if (e.key === 'Escape') setEditingId(null);
                   }}
                 />
-                <span className="inline-editor-unit">{inlineEditorUnit(c.type)}</span>
+                {inlineEditorUnit(c.type) && (
+                  <span className="inline-editor-unit">{inlineEditorUnit(c.type)}</span>
+                )}
               </>
             ) : (
-              <span style={{ color: 'var(--muted)', fontSize: '.85rem' }}>No value — probe only</span>
+              <span style={{ color: 'var(--muted)', fontSize: '.85rem' }}>
+                {c.type === 'A' ? 'Place in series — label it (e.g. i1)' : 'No value — probe only'}
+              </span>
             )}
+
+            {/* Control variable (G/E/F/H only) */}
+            {isDependent && (
+              <>
+                <span className="inline-editor-sep">·</span>
+                <span className="inline-editor-label">Control:</span>
+                <input
+                  key={`ctrl-${c.id}`}
+                  type="text"
+                  style={{ width: 72 }}
+                  placeholder="e.g. Vx"
+                  defaultValue={c.controlVar ?? ''}
+                  onBlur={e => updateComp({ controlVar: e.target.value.trim() || undefined })}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter')  { updateComp({ controlVar: (e.target as HTMLInputElement).value.trim() || undefined }); setEditingId(null); }
+                    if (e.key === 'Escape') setEditingId(null);
+                  }}
+                />
+              </>
+            )}
+
+            {/* Variable label (any component) */}
+            <>
+              <span className="inline-editor-sep">·</span>
+              <span className="inline-editor-label">Label:</span>
+              <input
+                key={`lbl-${c.id}`}
+                type="text"
+                style={{ width: 64 }}
+                placeholder="e.g. Vx"
+                defaultValue={c.varName ?? ''}
+                onBlur={e => updateComp({ varName: e.target.value.trim() || undefined })}
+                onKeyDown={e => {
+                  if (e.key === 'Enter')  { updateComp({ varName: (e.target as HTMLInputElement).value.trim() || undefined }); setEditingId(null); }
+                  if (e.key === 'Escape') setEditingId(null);
+                }}
+              />
+            </>
+
             <button className="inline-editor-rotate" onClick={rotateSelected} title="Cycle rotation (or press R)">
               ↻ {c.rotation}°
             </button>
@@ -718,7 +769,7 @@ export default function EditorCanvas({
                 onMouseDown={e => handleComponentMouseDown(c.id, e)}
                 filter={isSelected && !isDragged ? 'url(#sel-glow)' : undefined}
               >
-                <ComponentShape type={c.type} />
+                <ComponentShape type={c.type} controlVar={c.controlVar} />
                 {/* Hit area */}
                 <rect x={0} y={-14} width={COMP_PX} height={28} fill="transparent" />
                 {isSelected && !isDragged && (
@@ -728,7 +779,7 @@ export default function EditorCanvas({
                 )}
               </g>
 
-              {/* Value label (skip for OC) */}
+              {/* Value label (skip for OC; dependent sources show their value w/o controlVar here) */}
               {c.type !== 'OC' && (
                 <text x={s1.x + lo.dx} y={s1.y + lo.dy}
                   textAnchor="middle" fontSize={11} fill={color}
@@ -737,6 +788,24 @@ export default function EditorCanvas({
                   {formatValue(c.value, c.type)}
                 </text>
               )}
+
+              {/* varName badge — shown for any component that has one */}
+              {c.varName?.trim() && (() => {
+                const vn = c.varName.trim();
+                const bw = vn.length * 7 + 10;
+                const bx = s1.x + lo.dx;
+                const by = s1.y + lo.dy + (c.type === 'OC' ? 0 : 14);
+                return (
+                  <g pointerEvents="none">
+                    <rect x={bx - bw / 2} y={by - 9} width={bw} height={13} rx={3}
+                      fill="#fffbe6" stroke="#e8c000" strokeWidth={1} />
+                    <text x={bx} y={by + 2} textAnchor="middle" fontSize={9.5}
+                      fill="#6b4f00" fontStyle="italic" fontWeight="600">
+                      {vn}
+                    </text>
+                  </g>
+                );
+              })()}
 
               {/* Output port pin circles (pin1 & pin2) */}
               {renderPinCircle(rPin1, c.pin1, color)}
@@ -809,6 +878,7 @@ export default function EditorCanvas({
               <g transform={`translate(${s.x},${s.y}) rotate(${pendingRot})`} style={{ color: SEL_COLOR }}>
                 <ComponentShape type={type} />
               </g>
+              {/* no controlVar ghost needed — user sets it after placement */}
               <circle cx={s.x}  cy={s.y}  r={PIN_R} fill="white" stroke={SEL_COLOR} strokeWidth={1.5} />
               <circle cx={s2.x} cy={s2.y} r={PIN_R} fill="white" stroke={SEL_COLOR} strokeWidth={1.5} />
               {hasCtrlPins(type) && (() => {

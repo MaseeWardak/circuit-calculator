@@ -1,4 +1,4 @@
-import type { Branch, SolveResult } from '../types/circuit';
+import type { Branch, SolveResult, DisplayBranchType } from '../types/circuit';
 import { BRANCH_LABELS } from '../types/circuit';
 import { NODE_COLORS } from '../editor/constants';
 
@@ -22,7 +22,7 @@ export default function ResultsPanel({ result, branches }: Props) {
   if (result === null) {
     return (
       <div className="results-panel results-empty">
-        <p>Build a circuit and click <strong>⚡ Solve</strong>.</p>
+        <p>Build a circuit and click <strong>Solve</strong>.</p>
         <p style={{ marginTop: '.5rem', fontSize: '.82rem' }}>
           Nodes will be highlighted on the canvas after solving.
         </p>
@@ -74,7 +74,9 @@ export default function ResultsPanel({ result, branches }: Props) {
           {result.branch_currents.map((cur, i) => {
             const br = branches[i];
             if (!br) return null;
-            const meta = BRANCH_LABELS[br.type];
+            // displayType is set when CCCS/CCVS was converted to G/E, or A → V
+            const displayType: DisplayBranchType = br.displayType ?? br.type;
+            const meta = BRANCH_LABELS[displayType];
             return (
               <tr key={i}>
                 <td className="row-num">{i + 1}</td>
@@ -84,7 +86,7 @@ export default function ResultsPanel({ result, branches }: Props) {
                   N{br.n1} →{' '}
                   <span className="node-dot" style={{ background: NODE_COLORS[br.n2 % NODE_COLORS.length] }} />
                   N{br.n2}
-                  {(br.type === 'G' || br.type === 'E' || br.type === 'F' || br.type === 'H') && br.nc1 !== undefined && br.nc2 !== undefined && (
+                  {br.nc1 !== undefined && br.nc2 !== undefined && (
                     <span style={{ opacity: 0.7 }}>
                       {' '}ctrl:{' '}
                       <span className="node-dot" style={{ background: NODE_COLORS[br.nc1 % NODE_COLORS.length] }} />
@@ -92,6 +94,9 @@ export default function ResultsPanel({ result, branches }: Props) {
                       <span className="node-dot" style={{ background: NODE_COLORS[br.nc2 % NODE_COLORS.length] }} />
                       N{br.nc2}
                     </span>
+                  )}
+                  {br.vs_ctrl_idx !== undefined && (
+                    <span style={{ opacity: 0.7 }}> ctrl: VS#{br.vs_ctrl_idx + 1}</span>
                   )}
                 </td>
                 <td className="num-cell">{fmt(cur)} A</td>

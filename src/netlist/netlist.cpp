@@ -110,22 +110,22 @@ const VcvsEntry& Netlist::vcvs(int i) const {
     return vcvs_[i];
 }
 
-void Netlist::add_cccs(int n_out_from, int n_out_to,
-                       int n_ctrl_plus, int n_ctrl_minus, double beta) {
+void Netlist::add_cccs(int n_out_from, int n_out_to, int vs_ctrl_idx, double beta) {
     if (num_cccs_ >= kMaxCccs) throw std::length_error("too many CCCS elements");
-    if (n_out_from < 0 || n_out_to < 0 || n_ctrl_plus < 0 || n_ctrl_minus < 0
-        || static_cast<std::size_t>(max4(n_out_from, n_out_to, n_ctrl_plus, n_ctrl_minus)) >= node_count_)
-        throw std::out_of_range("CCCS node index out of range");
-    cccs_[num_cccs_++] = { n_out_from, n_out_to, n_ctrl_plus, n_ctrl_minus, beta };
+    if (n_out_from < 0 || n_out_to < 0)
+        throw std::out_of_range("CCCS output node index out of range");
+    if (vs_ctrl_idx < 0 || vs_ctrl_idx >= num_voltage_sources_)
+        throw std::out_of_range("CCCS vs_ctrl_idx out of range");
+    cccs_[num_cccs_++] = { n_out_from, n_out_to, vs_ctrl_idx, beta };
 }
 
-void Netlist::add_ccvs(int n_out_plus, int n_out_minus,
-                       int n_ctrl_plus, int n_ctrl_minus, double rm) {
+void Netlist::add_ccvs(int n_out_plus, int n_out_minus, int vs_ctrl_idx, double rm) {
     if (num_ccvs_ >= kMaxCcvs) throw std::length_error("too many CCVS elements");
-    if (n_out_plus < 0 || n_out_minus < 0 || n_ctrl_plus < 0 || n_ctrl_minus < 0
-        || static_cast<std::size_t>(max4(n_out_plus, n_out_minus, n_ctrl_plus, n_ctrl_minus)) >= node_count_)
-        throw std::out_of_range("CCVS node index out of range");
-    ccvs_[num_ccvs_++] = { n_out_plus, n_out_minus, n_ctrl_plus, n_ctrl_minus, rm };
+    if (n_out_plus < 0 || n_out_minus < 0)
+        throw std::out_of_range("CCVS output node index out of range");
+    if (vs_ctrl_idx < 0 || vs_ctrl_idx >= num_voltage_sources_)
+        throw std::out_of_range("CCVS vs_ctrl_idx out of range");
+    ccvs_[num_ccvs_++] = { n_out_plus, n_out_minus, vs_ctrl_idx, rm };
 }
 
 const CccsEntry& Netlist::cccs(int i) const {

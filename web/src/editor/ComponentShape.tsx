@@ -71,16 +71,36 @@ export function OpenCircuitShape() {
   );
 }
 
+// ── Current Probe (Ammeter) ───────────────────────────────────────────────
+// A 0 V series element used to define a named branch current (e.g. "i₁").
+// Visually: two short leads + a circle containing a small "A" letter.
+// Place it in series in the branch whose current you want to reference.
+export function AmmeterShape() {
+  return (
+    <>
+      <line x1={0}  y1={0} x2={23} y2={0} {...SW} />
+      <circle cx={40} cy={0} r={17} fill="white" stroke="currentColor" strokeWidth={2} />
+      {/* "A" label inside circle */}
+      <text x={40} y={5} textAnchor="middle" fontSize={15} fontWeight="700"
+        fill="currentColor" pointerEvents="none" fontFamily="serif">A</text>
+      <line x1={57} y1={0} x2={80} y2={0} {...SW} />
+    </>
+  );
+}
+
 // ─────────────────────────────────────────────────────────────────────────
-// Shared geometry for the four dependent-source diamonds
-// ─────────────────────────────────────────────────────────────────────────
+// Shared geometry for the four dependent-source diamonds.
 //
-// Diamond corners: left (14,0) · top (40,−23) · right (66,0) · bottom (40,23)
-// This is 52 px wide × 46 px tall — noticeably taller than before so the
-// internal symbols are readable and the ctrl-lead arrows have clear clearance.
+// All 4 types are now pure 2-terminal devices (no physical control leads).
+// The dependency is specified via a "controlVar" text field in the editor
+// and displayed as a small expression inside the diamond.
+//
+// Local coords: pin1=(0,0) · pin2=(80,0)
+// Diamond: left(14,0) · top(40,−23) · right(66,0) · bottom(40,23)
+// ─────────────────────────────────────────────────────────────────────────
 const D_PTS = "14,0 40,-23 66,0 40,23";
 
-// Output leads (common to all 4 types)
+// Output leads (same for all dependent sources)
 function OutLeads() {
   return (
     <>
@@ -90,36 +110,7 @@ function OutLeads() {
   );
 }
 
-// Voltage-sense control leads — dashed, no current flows through ctrl port
-function VCtrlLeads() {
-  const st = { stroke: 'currentColor', strokeWidth: 1.6, strokeDasharray: '3.5 2.5' } as const;
-  return (
-    <>
-      <line x1={40} y1={-40} x2={40} y2={-23} style={st} />
-      <line x1={40} y1={23}  x2={40} y2={40}  style={st} />
-      {/* + / − polarity labels near ctrl pins */}
-      <text x={33} y={-27} fontSize={9} fill="currentColor" fontWeight="700" pointerEvents="none">+</text>
-      <text x={33} y={33}  fontSize={9} fill="currentColor" fontWeight="700" pointerEvents="none">−</text>
-    </>
-  );
-}
-
-// Current-sense control leads — solid with a directional arrowhead
-// Positive sense current flows INTO ctrl+ (downward through the diamond)
-function ICtrlLeads() {
-  return (
-    <>
-      <line x1={40} y1={-40} x2={40} y2={-23} stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
-      <line x1={40} y1={23}  x2={40} y2={40}  stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" />
-      {/* Arrow on top lead: points downward (current entering ctrl+) */}
-      <polygon points="40,-29 37,-36 43,-36" fill="currentColor" />
-      {/* Arrow on bottom lead: points downward (current leaving ctrl−) */}
-      <polygon points="40,36 37,29 43,29" fill="currentColor" />
-    </>
-  );
-}
-
-// Current-output symbol: horizontal arrow → inside the diamond
+// Current-output arrow → inside diamond
 function IOutputSymbol() {
   return (
     <>
@@ -129,97 +120,119 @@ function IOutputSymbol() {
   );
 }
 
-// Voltage-output symbol: + cross on left, − bar on right inside the diamond
+// Voltage-output +/− inside diamond
 function VOutputSymbol() {
   return (
     <>
-      {/* + on pin1 side */}
       <line x1={24} y1={-4} x2={24} y2={4}  stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
       <line x1={20} y1={0}  x2={28} y2={0}  stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
-      {/* − on pin2 side */}
       <line x1={52} y1={0}  x2={60} y2={0}  stroke="currentColor" strokeWidth={2} strokeLinecap="round" />
     </>
   );
 }
 
-// Type-badge pill: centered below the diamond center (y ≈ 8) so it stays
-// inside the diamond body with a subtle tinted background
-function TypeBadge({ label, color }: { label: string; color: string }) {
-  const w = label.length * 6 + 8;
+// Small label strip at bottom of diamond showing the type pill and controlVar
+function DiamondLabels({
+  typePill, pillColor, controlVar,
+}: {
+  typePill: string;
+  pillColor: string;
+  controlVar?: string;
+}) {
+  const cv   = controlVar?.trim() ?? '';
+  const pill = typePill;
+  const pw   = pill.length * 5.8 + 8;
   return (
     <g pointerEvents="none">
-      <rect x={40 - w / 2} y={7} width={w} height={11} rx={2.5}
-        fill={color} fillOpacity={0.18} stroke={color} strokeOpacity={0.4} strokeWidth={0.8} />
-      <text x={40} y={16} textAnchor="middle" fontSize={7.5} fill="currentColor" fontWeight="700"
-        letterSpacing="0.3">{label}</text>
+      {/* Type pill — upper part of diamond interior */}
+      <rect x={40 - pw / 2} y={-11} width={pw} height={10} rx={2}
+        fill={pillColor} fillOpacity={0.18} stroke={pillColor} strokeOpacity={0.45} strokeWidth={0.7} />
+      <text x={40} y={-3} textAnchor="middle" fontSize={7} fill="currentColor" fontWeight="700"
+        letterSpacing="0.2">{pill}</text>
+      {/* controlVar expression — lower part */}
+      {cv && (
+        <>
+          <rect x={40 - (cv.length * 5 + 6) / 2} y={3} width={cv.length * 5 + 6} height={10} rx={2}
+            fill="#fff9e6" stroke="#e8c000" strokeWidth={0.7} />
+          <text x={40} y={11} textAnchor="middle" fontSize={7.5} fill="#6b4f00" fontStyle="italic"
+            fontWeight="600">{cv}</text>
+        </>
+      )}
+      {/* "?" indicator when no control is set */}
+      {!cv && (
+        <text x={40} y={12} textAnchor="middle" fontSize={8} fill="#aaa">?</text>
+      )}
     </g>
   );
 }
 
-// ── VCCS — Voltage-Controlled Current Source ─────────────────────────────
-function VccsShape() {
+// ── VCCS (G) ─────────────────────────────────────────────────────────────
+function VccsShape({ controlVar }: { controlVar?: string }) {
   return (
     <>
       <OutLeads />
-      <VCtrlLeads />
       <polygon points={D_PTS} fill="white" stroke="currentColor" strokeWidth={2} />
       <IOutputSymbol />
-      <TypeBadge label="VCCS" color="#2563eb" />
+      <DiamondLabels typePill="VCCS" pillColor="#2563eb" controlVar={controlVar} />
     </>
   );
 }
 
-// ── VCVS — Voltage-Controlled Voltage Source ──────────────────────────────
-function VcvsShape() {
+// ── VCVS (E) ─────────────────────────────────────────────────────────────
+function VcvsShape({ controlVar }: { controlVar?: string }) {
   return (
     <>
       <OutLeads />
-      <VCtrlLeads />
       <polygon points={D_PTS} fill="white" stroke="currentColor" strokeWidth={2} />
       <VOutputSymbol />
-      <TypeBadge label="VCVS" color="#7c3aed" />
+      <DiamondLabels typePill="VCVS" pillColor="#7c3aed" controlVar={controlVar} />
     </>
   );
 }
 
-// ── CCCS — Current-Controlled Current Source ─────────────────────────────
-function CccsShape() {
+// ── CCCS (F) ─────────────────────────────────────────────────────────────
+function CccsShape({ controlVar }: { controlVar?: string }) {
   return (
     <>
       <OutLeads />
-      <ICtrlLeads />
       <polygon points={D_PTS} fill="white" stroke="currentColor" strokeWidth={2} />
       <IOutputSymbol />
-      <TypeBadge label="CCCS" color="#ea580c" />
+      <DiamondLabels typePill="CCCS" pillColor="#ea580c" controlVar={controlVar} />
     </>
   );
 }
 
-// ── CCVS — Current-Controlled Voltage Source ──────────────────────────────
-function CcvsShape() {
+// ── CCVS (H) ─────────────────────────────────────────────────────────────
+function CcvsShape({ controlVar }: { controlVar?: string }) {
   return (
     <>
       <OutLeads />
-      <ICtrlLeads />
       <polygon points={D_PTS} fill="white" stroke="currentColor" strokeWidth={2} />
       <VOutputSymbol />
-      <TypeBadge label="CCVS" color="#dc2626" />
+      <DiamondLabels typePill="CCVS" pillColor="#dc2626" controlVar={controlVar} />
     </>
   );
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
 
-export function ComponentShape({ type }: { type: ComponentType }) {
+export function ComponentShape({
+  type,
+  controlVar,
+}: {
+  type: ComponentType;
+  controlVar?: string;
+}) {
   switch (type) {
     case 'R':  return <ResistorShape />;
     case 'V':  return <VoltageSourceShape />;
     case 'I':  return <CurrentSourceShape />;
     case 'OC': return <OpenCircuitShape />;
-    case 'G':  return <VccsShape />;
-    case 'E':  return <VcvsShape />;
-    case 'F':  return <CccsShape />;
-    case 'H':  return <CcvsShape />;
+    case 'A':  return <AmmeterShape />;
+    case 'G':  return <VccsShape controlVar={controlVar} />;
+    case 'E':  return <VcvsShape controlVar={controlVar} />;
+    case 'F':  return <CccsShape controlVar={controlVar} />;
+    case 'H':  return <CcvsShape controlVar={controlVar} />;
   }
 }
 

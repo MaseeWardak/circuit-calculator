@@ -40,28 +40,27 @@ struct VcvsEntry {
 };
 
 /**
- * Current-controlled current source:  I_out = beta * I_sense
- * The control port (n_ctrl_plus / n_ctrl_minus) is wired in series and acts as
- * a 0 V ammeter — positive sense current flows INTO n_ctrl_plus.
- * Output current flows from n_out_from to n_out_to through the source.
+ * Current-controlled current source:  I_out = beta * I_vs_k
+ * vs_ctrl_idx is the 0-based index of the controlling voltage source in
+ * the netlist's voltage_sources array.  Its MNA current unknown is used
+ * directly — no extra unknown is required.
  */
 struct CccsEntry {
     int    n_out_from{};
     int    n_out_to{};
-    int    n_ctrl_plus{};
-    int    n_ctrl_minus{};
+    int    vs_ctrl_idx{};
     double beta{1.0};
 };
 
 /**
- * Current-controlled voltage source:  V(out+) − V(out−) = rm * I_sense
- * Same sense-port convention as CccsEntry.  rm is transresistance (Ω).
+ * Current-controlled voltage source:  V(out+) − V(out−) = rm * I_vs_k
+ * vs_ctrl_idx has the same semantics as CccsEntry.  rm is transresistance (Ω).
+ * One extra unknown (output VS current) is added to the MNA system.
  */
 struct CcvsEntry {
     int    n_out_plus{};
     int    n_out_minus{};
-    int    n_ctrl_plus{};
-    int    n_ctrl_minus{};
+    int    vs_ctrl_idx{};
     double rm{1.0};
 };
 
@@ -84,8 +83,8 @@ public:
     void add_voltage_source(int node_plus, int node_minus, double volts);
     void add_vccs(int n_out_from, int n_out_to, int n_ctrl_plus, int n_ctrl_minus, double gm);
     void add_vcvs(int n_out_plus, int n_out_minus, int n_ctrl_plus, int n_ctrl_minus, double mu);
-    void add_cccs(int n_out_from, int n_out_to, int n_ctrl_plus, int n_ctrl_minus, double beta);
-    void add_ccvs(int n_out_plus, int n_out_minus, int n_ctrl_plus, int n_ctrl_minus, double rm);
+    void add_cccs(int n_out_from, int n_out_to, int vs_ctrl_idx, double beta);
+    void add_ccvs(int n_out_plus, int n_out_minus, int vs_ctrl_idx, double rm);
 
     int resistor_count()       const { return num_resistors_; }
     int current_source_count() const { return num_current_sources_; }

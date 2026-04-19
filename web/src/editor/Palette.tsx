@@ -23,7 +23,8 @@ const ITEMS: PaletteItem[] = [
   { type: 'F',  label: 'CCCS',           symbol: '◆I', description: 'Current-controlled current source (β)'  },
   { type: 'H',  label: 'CCVS',           symbol: '◆V', description: 'Current-controlled voltage source (rm)' },
   // ── Passive utilities ────────────────────────────────────
-  { type: 'OC', label: 'Open Circuit',   symbol: '⊸', description: 'Open-circuit probe (no current flows)' },
+  { type: 'OC', label: 'Open Circuit',   symbol: '⊸',  description: 'Open-circuit probe (no current flows)' },
+  { type: 'A',  label: 'Current Probe',  symbol: 'Ⓐ',  description: 'Ammeter — place in series, label it (e.g. i1), then reference it from CCCS/CCVS' },
   // ── Net label ────────────────────────────────────────────
   { type: 'L',  label: 'Net Label',      symbol: '🏷', description: 'Named net — two matching labels connect electrically' },
 ];
@@ -31,7 +32,7 @@ const ITEMS: PaletteItem[] = [
 const GROUPS = [
   { title: 'Independent',  types: ['R', 'V', 'I'] as ToolType[] },
   { title: 'Dependent',    types: ['G', 'E', 'F', 'H'] as ToolType[] },
-  { title: 'Utility',      types: ['OC', 'L']      as ToolType[] },
+  { title: 'Utility',      types: ['OC', 'A', 'L'] as ToolType[] },
 ];
 
 export default function Palette({ selected, onSelect }: Props) {
@@ -73,7 +74,15 @@ export default function Palette({ selected, onSelect }: Props) {
           <li><kbd>Del</kbd> → delete selected</li>
           <li><kbd>Esc</kbd> → cancel</li>
           <li style={{ marginTop: '.4rem', color: 'var(--muted)' }}>
-            VCCS/VCVS: ctrl pins sense voltage<br/>CCCS/CCVS: ctrl pins sense current<br/>(wire ctrl port in series)
+            Dependent sources are 2-terminal.<br/>
+            After placing, click again to set value &amp; Control.<br/>
+            <br/>
+            <b>Voltage control (VCCS/VCVS):</b><br/>
+            Label any component "Vx" — its terminal voltage becomes Vx.<br/>
+            <br/>
+            <b>Current control (CCCS/CCVS):</b><br/>
+            Place a <b>Current Probe (A)</b> in series and label it "i1".<br/>
+            Or label a resistor "i1" (I = V/R).
           </li>
         </ul>
       </div>

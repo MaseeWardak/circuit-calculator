@@ -20,9 +20,9 @@ DcAnalysisResult DcSolver::solve(const Netlist& netlist) const {
     const int n_free = static_cast<int>(n_nodes) - 1;
     const int n_vs   = netlist.voltage_source_count();
     const int n_vcvs = netlist.vcvs_count();
-    const int n_cccs = netlist.cccs_count();
-    const int n_ccvs = netlist.ccvs_count();
-    const int dim    = n_free + n_vs + n_vcvs + n_cccs + 2 * n_ccvs;
+    const int n_hs   = netlist.ccvs_count();  // each H needs one extra unknown
+    // n_cccs (F) needs NO extra unknown — it reuses the VS current column.
+    const int dim    = n_free + n_vs + n_vcvs + n_hs;
 
     if (dim <= 0) {
         DcAnalysisResult empty{};
@@ -41,6 +41,10 @@ DcAnalysisResult DcSolver::solve(const Netlist& netlist) const {
     double* b = new double[static_cast<std::size_t>(dim)];
     for (int i = 0; i < dim; ++i) b[i] = 0.0;
 
+    auto A = [&](int r, int c) -> double& {
+        return a.at(static_cast<std::size_t>(r), static_cast<std::size_t>(c));
+    };
+
     // ── Resistors ─────────────────────────────────────────────────────────
     for (int ri = 0; ri < netlist.resistor_count(); ++ri) {
         const ResistorEntry& r = netlist.resistor(ri);
@@ -48,12 +52,9 @@ DcAnalysisResult DcSolver::solve(const Netlist& netlist) const {
         const double g = 1.0 / r.ohms;
         const int ua = unknown_index(r.node_a);
         const int ub = unknown_index(r.node_b);
-        if (ua >= 0) a.at(static_cast<std::size_t>(ua), static_cast<std::size_t>(ua)) += g;
-        if (ub >= 0) a.at(static_cast<std::size_t>(ub), static_cast<std::size_t>(ub)) += g;
-        if (ua >= 0 && ub >= 0) {
-            a.at(static_cast<std::size_t>(ua), static_cast<std::size_t>(ub)) -= g;
-            a.at(static_cast<std::size_t>(ub), static_cast<std::size_t>(ua)) -= g;
-        }
+        if (ua >= 0) A(ua, ua) += g;
+        if (ub >= 0) A(ub, ub) += g;
+        if (ua >= 0 && ub >= 0) { A(ua, ub) -= g; A(ub, ua) -= g; }
     }
 
     // ── Current sources ───────────────────────────────────────────────────
@@ -65,18 +66,18 @@ DcAnalysisResult DcSolver::solve(const Netlist& netlist) const {
         if (ut >= 0) b[ut] += cs.amperes;
     }
 
-    // ── VCCS ──────────────────────────────────────────────────────────────
-    // I = gm * (V_ctrl+ − V_ctrl−), flowing from n_out_from to n_out_to.
+    // ── VCCS (G): I = gm * (V_ctrl+ − V_ctrl−) ───────────────────────────
+    // Also handles CCCS-from-resistor which is emitted as G by the frontend.
     for (int gi = 0; gi < netlist.vccs_count(); ++gi) {
         const VccsEntry& g = netlist.vccs(gi);
         const int uf  = unknown_index(g.n_out_from);
         const int ut  = unknown_index(g.n_out_to);
         const int ucp = unknown_index(g.n_ctrl_plus);
         const int ucm = unknown_index(g.n_ctrl_minus);
-        if (ut  >= 0 && ucp >= 0) a.at(static_cast<std::size_t>(ut),  static_cast<std::size_t>(ucp))  += g.gm;
-        if (ut  >= 0 && ucm >= 0) a.at(static_cast<std::size_t>(ut),  static_cast<std::size_t>(ucm))  -= g.gm;
-        if (uf  >= 0 && ucp >= 0) a.at(static_cast<std::size_t>(uf),  static_cast<std::size_t>(ucp))  -= g.gm;
-        if (uf  >= 0 && ucm >= 0) a.at(static_cast<std::size_t>(uf),  static_cast<std::size_t>(ucm))  += g.gm;
+        if (ut  >= 0 && ucp >= 0) A(ut,  ucp) += g.gm;
+        if (ut  >= 0 && ucm >= 0) A(ut,  ucm) -= g.gm;
+        if (uf  >= 0 && ucp >= 0) A(uf,  ucp) -= g.gm;
+        if (uf  >= 0 && ucm >= 0) A(uf,  ucm) += g.gm;
     }
 
     // ── Independent voltage sources ───────────────────────────────────────
@@ -85,20 +86,13 @@ DcAnalysisResult DcSolver::solve(const Netlist& netlist) const {
         const int col = n_free + k;
         const int up  = unknown_index(vs.node_plus);
         const int um  = unknown_index(vs.node_minus);
-        if (up >= 0) {
-            a.at(static_cast<std::size_t>(up),  static_cast<std::size_t>(col)) += 1.0;
-            a.at(static_cast<std::size_t>(col), static_cast<std::size_t>(up))  += 1.0;
-        }
-        if (um >= 0) {
-            a.at(static_cast<std::size_t>(um),  static_cast<std::size_t>(col)) -= 1.0;
-            a.at(static_cast<std::size_t>(col), static_cast<std::size_t>(um))  -= 1.0;
-        }
+        if (up >= 0) { A(up, col) += 1.0; A(col, up) += 1.0; }
+        if (um >= 0) { A(um, col) -= 1.0; A(col, um) -= 1.0; }
         b[col] = vs.volts;
     }
 
-    // ── VCVS ──────────────────────────────────────────────────────────────
-    // V(out+) − V(out−) = mu * (V_ctrl+ − V_ctrl−)
-    // Extra unknown i_k at index n_free + n_vs + k.
+    // ── VCVS (E): V_out+ − V_out− = mu * (V_ctrl+ − V_ctrl−) ─────────────
+    // Also handles CCVS-from-resistor emitted as E by the frontend.
     for (int k = 0; k < n_vcvs; ++k) {
         const VcvsEntry& e = netlist.vcvs(k);
         const int col = n_free + n_vs + k;
@@ -106,68 +100,38 @@ DcAnalysisResult DcSolver::solve(const Netlist& netlist) const {
         const int um  = unknown_index(e.n_out_minus);
         const int ucp = unknown_index(e.n_ctrl_plus);
         const int ucm = unknown_index(e.n_ctrl_minus);
-        if (up >= 0) {
-            a.at(static_cast<std::size_t>(up),  static_cast<std::size_t>(col)) += 1.0;
-            a.at(static_cast<std::size_t>(col), static_cast<std::size_t>(up))  += 1.0;
-        }
-        if (um >= 0) {
-            a.at(static_cast<std::size_t>(um),  static_cast<std::size_t>(col)) -= 1.0;
-            a.at(static_cast<std::size_t>(col), static_cast<std::size_t>(um))  -= 1.0;
-        }
-        // KVL constraint: V_out+ − V_out− − mu·V_ctrl+ + mu·V_ctrl− = 0
-        if (ucp >= 0) a.at(static_cast<std::size_t>(col), static_cast<std::size_t>(ucp)) -= e.mu;
-        if (ucm >= 0) a.at(static_cast<std::size_t>(col), static_cast<std::size_t>(ucm)) += e.mu;
+        if (up >= 0) { A(up, col) += 1.0; A(col, up) += 1.0; }
+        if (um >= 0) { A(um, col) -= 1.0; A(col, um) -= 1.0; }
+        if (ucp >= 0) A(col, ucp) -= e.mu;
+        if (ucm >= 0) A(col, ucm) += e.mu;
         b[col] = 0.0;
     }
 
-    // ── CCCS (F): I_out = beta * I_sense ─────────────────────────────────
-    // Extra unknown I_sense at col = n_free + n_vs + n_vcvs + k.
-    const int cccs_base = n_free + n_vs + n_vcvs;
-    for (int k = 0; k < n_cccs; ++k) {
+    // ── CCCS (F): I_out = beta * I_vs_k ───────────────────────────────────
+    // No extra unknown — modifies existing VS current column directly.
+    for (int k = 0; k < netlist.cccs_count(); ++k) {
         const CccsEntry& f = netlist.cccs(k);
-        const int col = cccs_base + k;
-        const int uf  = unknown_index(f.n_out_from);
-        const int ut  = unknown_index(f.n_out_to);
-        const int ucp = unknown_index(f.n_ctrl_plus);
-        const int ucm = unknown_index(f.n_ctrl_minus);
-        // Sense ammeter (0 V source)
-        if (ucp >= 0) { a.at(static_cast<std::size_t>(ucp), static_cast<std::size_t>(col)) += 1.0;
-                        a.at(static_cast<std::size_t>(col), static_cast<std::size_t>(ucp)) += 1.0; }
-        if (ucm >= 0) { a.at(static_cast<std::size_t>(ucm), static_cast<std::size_t>(col)) -= 1.0;
-                        a.at(static_cast<std::size_t>(col), static_cast<std::size_t>(ucm)) -= 1.0; }
-        b[col] = 0.0;
-        // Output current = beta * I_sense enters n_out_to, leaves n_out_from
-        if (ut >= 0) a.at(static_cast<std::size_t>(ut), static_cast<std::size_t>(col)) += f.beta;
-        if (uf >= 0) a.at(static_cast<std::size_t>(uf), static_cast<std::size_t>(col)) -= f.beta;
+        const int col_vs = n_free + f.vs_ctrl_idx;
+        const int uf = unknown_index(f.n_out_from);
+        const int ut = unknown_index(f.n_out_to);
+        if (ut >= 0) A(ut, col_vs) += f.beta;
+        if (uf >= 0) A(uf, col_vs) -= f.beta;
     }
 
-    // ── CCVS (H): V_out = rm * I_sense ───────────────────────────────────
-    // 2 extra unknowns per instance:
-    //   col_s = ccvs_base + 2k     (sense current)
-    //   col_o = ccvs_base + 2k + 1 (output VS current)
-    const int ccvs_base = cccs_base + n_cccs;
-    for (int k = 0; k < n_ccvs; ++k) {
+    // ── CCVS (H): V_out+ − V_out− = rm * I_vs_k ──────────────────────────
+    // 1 extra unknown per H at col = n_free + n_vs + n_vcvs + k.
+    for (int k = 0; k < n_hs; ++k) {
         const CcvsEntry& h = netlist.ccvs(k);
-        const int col_s = ccvs_base + 2 * k;
-        const int col_o = ccvs_base + 2 * k + 1;
-        const int uf  = unknown_index(h.n_out_plus);
-        const int ut  = unknown_index(h.n_out_minus);
-        const int ucp = unknown_index(h.n_ctrl_plus);
-        const int ucm = unknown_index(h.n_ctrl_minus);
-        // Sense ammeter
-        if (ucp >= 0) { a.at(static_cast<std::size_t>(ucp), static_cast<std::size_t>(col_s)) += 1.0;
-                        a.at(static_cast<std::size_t>(col_s), static_cast<std::size_t>(ucp)) += 1.0; }
-        if (ucm >= 0) { a.at(static_cast<std::size_t>(ucm), static_cast<std::size_t>(col_s)) -= 1.0;
-                        a.at(static_cast<std::size_t>(col_s), static_cast<std::size_t>(ucm)) -= 1.0; }
-        b[col_s] = 0.0;
-        // Output VS coupling
-        if (uf >= 0) { a.at(static_cast<std::size_t>(uf),  static_cast<std::size_t>(col_o)) += 1.0;
-                       a.at(static_cast<std::size_t>(col_o), static_cast<std::size_t>(uf))  += 1.0; }
-        if (ut >= 0) { a.at(static_cast<std::size_t>(ut),  static_cast<std::size_t>(col_o)) -= 1.0;
-                       a.at(static_cast<std::size_t>(col_o), static_cast<std::size_t>(ut))  -= 1.0; }
-        // KVL: V_out+ - V_out- - rm * I_sense = 0
-        a.at(static_cast<std::size_t>(col_o), static_cast<std::size_t>(col_s)) -= h.rm;
-        b[col_o] = 0.0;
+        const int col_vs = n_free + h.vs_ctrl_idx;
+        const int col    = n_free + n_vs + n_vcvs + k;
+        const int up = unknown_index(h.n_out_plus);
+        const int um = unknown_index(h.n_out_minus);
+        // KCL coupling (output terminal currents)
+        if (up >= 0) { A(up, col) += 1.0; A(col, up) += 1.0; }
+        if (um >= 0) { A(um, col) -= 1.0; A(col, um) -= 1.0; }
+        // KVL: V_out+ − V_out− = rm · I_vs_k  →  A[col][col_vs] −= rm
+        A(col, col_vs) -= h.rm;
+        b[col] = 0.0;
     }
 
     try {
@@ -208,15 +172,17 @@ DcAnalysisResult DcSolver::solve(const Netlist& netlist) const {
     for (int k = 0; k < n_vcvs; ++k)
         out.vcvs_current[k] = b[n_free + n_vs + k];
 
-    out.num_cccs = n_cccs;
-    for (int k = 0; k < n_cccs; ++k) {
+    // CCCS: I_out = beta * I_vs_k  (I_vs_k is the VS current extra unknown)
+    out.num_cccs = netlist.cccs_count();
+    for (int k = 0; k < out.num_cccs; ++k) {
         const CccsEntry& f = netlist.cccs(k);
-        out.cccs_current[k] = f.beta * b[cccs_base + k];
+        out.cccs_current[k] = f.beta * b[n_free + f.vs_ctrl_idx];
     }
 
-    out.num_ccvs = n_ccvs;
-    for (int k = 0; k < n_ccvs; ++k)
-        out.ccvs_current[k] = b[ccvs_base + 2 * k + 1];
+    // CCVS: output current is the extra unknown
+    out.num_ccvs = n_hs;
+    for (int k = 0; k < n_hs; ++k)
+        out.ccvs_current[k] = b[n_free + n_vs + n_vcvs + k];
 
     delete[] b;
     return out;
