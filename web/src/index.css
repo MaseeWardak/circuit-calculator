@@ -69,6 +69,19 @@ body { min-height: 100vh; }
 }
 .header-btn.solve:hover:not(:disabled) { background: #333; transform: translateY(-1px); }
 .header-btn.solve:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+.header-btn.visualize {
+  background: #1a1a1a;
+  color: #7dd3fc;
+  border-color: #7dd3fc55;
+  padding: .44rem 1.1rem;
+}
+.header-btn.visualize:hover { background: #0f172a; transform: translateY(-1px); }
+.header-btn.visualize.active {
+  background: #0c4a6e;
+  color: #38bdf8;
+  border-color: #38bdf8;
+  box-shadow: 0 0 8px #38bdf888;
+}
 
 .app-footer {
   text-align: center;
@@ -262,7 +275,10 @@ input:focus, select:focus {
   font-size: .85rem;
 }
 .inline-editor-label { color: var(--muted); white-space: nowrap; font-size: .82rem; }
+.inline-editor-sep   { color: var(--border); user-select: none; }
 .inline-editor input  { width: 88px; }
+.inline-editor input[style*="width: 72"] { width: 72px; }
+.inline-editor input[style*="width: 64"] { width: 64px; }
 .inline-editor-unit   { color: var(--muted); }
 
 .inline-editor-rotate {
@@ -313,6 +329,7 @@ input:focus, select:focus {
   border-right: none;
   padding: 1rem;
   overflow-y: auto;
+  min-height: 0; /* allow column to scroll inside grid on short viewports */
 }
 
 /* ---- Results panel ------------------------------------------------------- */
@@ -366,3 +383,161 @@ input:focus, select:focus {
 }
 
 .row-num { color: var(--muted); font-size: .78rem; text-align: center; }
+
+/* ---- Solution Steps panel -------------------------------------------------- */
+.steps-root { display: flex; flex-direction: column; gap: .25rem; }
+
+.steps-section { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+
+.steps-toggle {
+  width: 100%;
+  background: #f4f6fb;
+  border: none;
+  cursor: pointer;
+  padding: .42rem .7rem;
+  text-align: left;
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  user-select: none;
+}
+.steps-toggle:hover    { background: #eef1f7; }
+.steps-toggle.open     { background: #fffce8; border-bottom: 1px solid var(--border); }
+.steps-toggle-arrow    { font-size: .7rem; color: var(--muted); }
+
+.steps-body {
+  padding: .5rem .7rem .6rem;
+  background: white;
+  display: flex;
+  flex-direction: column;
+  gap: .08rem;
+}
+
+.steps-sep     { height: .45rem; }
+.steps-heading { font-size: .8rem; font-weight: 700; color: #1e293b; margin-top: .2rem; }
+.steps-text    { font-size: .78rem; color: var(--text); margin: 0; }
+
+.steps-eq {
+  font-family: 'Courier New', monospace;
+  font-size: .76rem;
+  color: #1e293b;
+  margin: 0;
+  white-space: pre-wrap;
+  background: #f8f9fc;
+  border-radius: 3px;
+  padding: .1rem .3rem;
+}
+.steps-ok {
+  font-family: 'Courier New', monospace;
+  font-size: .76rem;
+  color: #15803d;
+  margin: 0;
+  white-space: pre-wrap;
+  background: #f0fdf4;
+  border-radius: 3px;
+  padding: .1rem .3rem;
+}
+.steps-warn {
+  font-family: 'Courier New', monospace;
+  font-size: .76rem;
+  color: #b45309;
+  margin: 0;
+  white-space: pre-wrap;
+  background: #fffbeb;
+  border-radius: 3px;
+  padding: .1rem .3rem;
+}
+
+/* ---- Thévenin / Norton panel ---------------------------------------------- */
+.thevenin-panel {
+  margin-top: 1.2rem;
+  border-top: 2px solid #7c3aed33;
+  padding-top: .9rem;
+}
+.thevenin-title {
+  font-size: .78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: #7c3aed;
+  margin: 0 0 .2rem;
+}
+.thevenin-subtitle {
+  font-size: .78rem;
+  color: var(--muted);
+  margin-bottom: .6rem;
+}
+.thevenin-note {
+  font-size: .78rem;
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 4px;
+  padding: .3rem .5rem;
+  margin-bottom: .6rem;
+}
+.thevenin-table { margin-bottom: .8rem; }
+.thevenin-param {
+  font-weight: 600;
+  font-family: 'Courier New', monospace;
+  font-size: .85rem;
+  color: #4c1d95;
+  white-space: nowrap;
+}
+.thevenin-hint {
+  font-size: .75rem;
+  color: var(--muted);
+  padding-left: .3rem;
+}
+.thevenin-circuits {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.thevenin-eq {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: .2rem;
+  background: #f8f7ff;
+  border: 1px solid #c4b5fd;
+  border-radius: 6px;
+  padding: .5rem .7rem;
+  min-width: 120px;
+}
+.thevenin-eq-label {
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: #7c3aed;
+}
+.thevenin-eq-val {
+  font-size: .72rem;
+  color: var(--muted);
+  text-align: center;
+  margin: 0;
+}
+
+/* ---- Visualization animations -------------------------------------------- */
+
+/* Wire marching-ants: dashes move forward (from→to in SVG line direction) */
+@keyframes march-fwd {
+  from { stroke-dashoffset: 18; }
+  to   { stroke-dashoffset: 0;  }
+}
+
+/* Wire marching-ants: dashes move backward (to→from) */
+@keyframes march-rev {
+  from { stroke-dashoffset: 0;  }
+  to   { stroke-dashoffset: 18; }
+}
+
+/* Current-arrow pulse on components */
+@keyframes cur-pulse {
+  0%, 100% { opacity: 0.65; transform: scaleX(1);    }
+  50%       { opacity: 1;    transform: scaleX(1.25); }
+}

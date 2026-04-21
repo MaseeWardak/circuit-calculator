@@ -18,29 +18,15 @@ type WasmModule = { solve_circuit: (json: string) => string };
 let wasmModule: WasmModule | null = null;
 let wasmLoadAttempted = false;
 
+// WASM loading is intentionally disabled: the pre-compiled binary pre-dates
+// the current F/H (CCCS/CCVS) redesign and crashes with the new JSON format.
+// The TypeScript MNA solver is correct and handles all branch types.
+// Re-enable once a new WASM binary is built with Emscripten.
 async function tryLoadWasm(): Promise<WasmModule | null> {
   if (wasmLoadAttempted) return wasmModule;
   wasmLoadAttempted = true;
-  try {
-    // Dynamic import; Vite will leave this as-is since it's a runtime URL.
-    // The script sets window.createCircuitCalc (from Emscripten EXPORT_NAME).
-    await new Promise<void>((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = '/wasm/circuitcalc_wasm.js';
-      s.onload = () => resolve();
-      s.onerror = () => reject(new Error('WASM script not found'));
-      document.head.appendChild(s);
-    });
-    const factory = (window as unknown as Record<string, unknown>)['createCircuitCalc'] as
-      ((opts?: unknown) => Promise<WasmModule>) | undefined;
-    if (!factory) throw new Error('createCircuitCalc not on window');
-    wasmModule = await factory();
-    console.info('[solver] Using C++ WASM engine.');
-    return wasmModule;
-  } catch {
-    console.info('[solver] WASM not available – using TypeScript fallback solver.');
-    return null;
-  }
+  console.info('[solver] WASM disabled – using TypeScript solver.');
+  return null;
 }
 
 export async function solve(input: CircuitInput): Promise<SolveResult> {
@@ -50,9 +36,9 @@ export async function solve(input: CircuitInput): Promise<SolveResult> {
       const json = wasm.solve_circuit(JSON.stringify(input));
       return JSON.parse(json) as SolveResult;
     } catch (e) {
-      return { ok: false, error: (e as Error).message };
+      // WASM failed — fall through to TypeScript solver
+      console.warn('[solver] WASM error, falling back to TypeScript solver:', e);
     }
   }
-  // TypeScript fallback (synchronous, wrapped in a promise for uniform API)
   return solveTs(input);
 }

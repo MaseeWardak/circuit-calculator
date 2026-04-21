@@ -116,7 +116,7 @@ ParsedCircuit parse_netlist_json(const char* json) {
                     throw circuit_error("too many branches");
 
                 std::string type;
-                int n1 = 0, n2 = 0, nc1 = -1, nc2 = -1;
+                int n1 = 0, n2 = 0, nc1 = -1, nc2 = -1, vs_ctrl_idx = -1;
                 double value = 0.0;
 
                 skip_ws(json, i);
@@ -124,13 +124,14 @@ ParsedCircuit parse_netlist_json(const char* json) {
                     const std::string bkey = parse_string(json, i);
                     expect_char(json, i, ':');
                     skip_ws(json, i);
-                    if      (bkey == "type")  type  = parse_string(json, i);
-                    else if (bkey == "n1")    n1    = parse_int(json, i);
-                    else if (bkey == "n2")    n2    = parse_int(json, i);
-                    else if (bkey == "nc1")   nc1   = parse_int(json, i);
-                    else if (bkey == "nc2")   nc2   = parse_int(json, i);
-                    else if (bkey == "value") value = parse_number(json, i);
-                    else                      skip_value(json, i);
+                    if      (bkey == "type")         type         = parse_string(json, i);
+                    else if (bkey == "n1")           n1           = parse_int(json, i);
+                    else if (bkey == "n2")           n2           = parse_int(json, i);
+                    else if (bkey == "nc1")          nc1          = parse_int(json, i);
+                    else if (bkey == "nc2")          nc2          = parse_int(json, i);
+                    else if (bkey == "vs_ctrl_idx")  vs_ctrl_idx  = parse_int(json, i);
+                    else if (bkey == "value")        value        = parse_number(json, i);
+                    else                             skip_value(json, i);
                     skip_ws(json, i);
                     if (json[i] == ',') ++i;
                 }
@@ -156,14 +157,18 @@ ParsedCircuit parse_netlist_json(const char* json) {
                     out.netlist.add_vcvs(n1, n2, nc1, nc2, value);
                     out.branch_types[out.num_branches++] = 'E';
                 } else if (type == "F") {
-                    if (nc1 < 0 || nc2 < 0)
-                        throw circuit_error("CCCS branch missing nc1/nc2 fields");
-                    out.netlist.add_cccs(n1, n2, nc1, nc2, value);
+                    // CCCS: controlled by VS current (vs_ctrl_idx required).
+                    // CCCS-from-resistor is emitted as type G by the frontend.
+                    if (vs_ctrl_idx < 0)
+                        throw circuit_error("CCCS branch missing vs_ctrl_idx field");
+                    out.netlist.add_cccs(n1, n2, vs_ctrl_idx, value);
                     out.branch_types[out.num_branches++] = 'F';
                 } else if (type == "H") {
-                    if (nc1 < 0 || nc2 < 0)
-                        throw circuit_error("CCVS branch missing nc1/nc2 fields");
-                    out.netlist.add_ccvs(n1, n2, nc1, nc2, value);
+                    // CCVS: controlled by VS current (vs_ctrl_idx required).
+                    // CCVS-from-resistor is emitted as type E by the frontend.
+                    if (vs_ctrl_idx < 0)
+                        throw circuit_error("CCVS branch missing vs_ctrl_idx field");
+                    out.netlist.add_ccvs(n1, n2, vs_ctrl_idx, value);
                     out.branch_types[out.num_branches++] = 'H';
                 } else {
                     throw circuit_error("unknown branch type: " + type);

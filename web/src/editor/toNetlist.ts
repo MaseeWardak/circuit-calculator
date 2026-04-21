@@ -1,6 +1,6 @@
-import type { Schematic } from './types';
-import type { CircuitInput } from '../types/circuit';
-import { getPin2, getCtrlPin1, getCtrlPin2, hasCtrlPins, allPinsOf, gk } from './utils';
+import type { Schematic, PlacedComponent } from './types';
+import type { CircuitInput, Branch, BranchType } from '../types/circuit';
+import { getPin2, allPinsOf, gk } from './utils';
 
 // ---------------------------------------------------------------------------
 // Geometry helper
@@ -59,17 +59,13 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
 
   const uf = makeUF();
 
-  // 1. Seed every component pin (including ctrl pins for G/E)
+  // 1. Seed every component pin — all components are now 2-terminal (allPinsOf
+  //    returns [pin1, pin2] since hasCtrlPins always returns false).
   for (const c of components) {
     for (const pin of allPinsOf(c)) uf.find(gk(pin));
   }
-  // Seed wire endpoints
-  for (const w of wires) {
-    uf.find(gk(w.from));
-    uf.find(gk(w.to));
-  }
-  // Seed label anchor points
-  for (const lbl of labels) uf.find(gk(lbl.point));
+  for (const w of wires)  { uf.find(gk(w.from)); uf.find(gk(w.to)); }
+  for (const l of labels) uf.find(gk(l.point));
 
   // 2. Union wire endpoints
   for (const w of wires) uf.union(gk(w.from), gk(w.to));
@@ -88,12 +84,23 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
   }
 
   // 4. Component-pin T-junctions (with short-circuit guard).
-  //    Applied to ALL electrically significant pins (incl. ctrl pins for G/E).
+  //
+  // When a pin sits on the *interior* of a wire segment (not at that wire's
+  // endpoints), union the pin with one endpoint of that wire so it joins the
+  // backbone net.
+  //
+  // The old guard compared pin-root *sets* for different pins and skipped all
+  // unions if the sets shared *any* root.  Two pins on the same long wire each
+  // include uf.find(w.from) for that backbone — that is *not* a short between
+  // the component pins; it incorrectly skipped the unions and left mid-line
+  // points electrically disconnected from the wire (wrong node colours / solve).
+  //
+  // Only skip when this component's own pins are *already* the same node before
+  // these unions (redundant or degenerate placement).
   for (const c of components) {
-    const pins = allPinsOf(c);
+    const pins    = allPinsOf(c);
     const pinKeys = pins.map(p => gk(p));
 
-    // For each pin: which wire segments contain it strictly inside?
     const pinWires = pins.map((pin, pi) =>
       wires.filter(w =>
         onSegment(w.from, w.to, pin)
@@ -105,35 +112,25 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
     const anyTJunction = pinWires.some(pw => pw.length > 0);
     if (!anyTJunction) continue;
 
-    // Would merging short-circuit any pair of this component's pins?
-    const pinRoots = pins.map((pin, pi) => {
-      const s = new Set([uf.find(pinKeys[pi])]);
-      for (const w of pinWires[pi]) s.add(uf.find(gk(w.from)));
-      return s;
-    });
+    const pinsAlreadySameNode =
+      pinKeys.length >= 2 && uf.find(pinKeys[0]) === uf.find(pinKeys[1]);
 
-    let wouldShort = false;
-    for (let a = 0; a < pinRoots.length && !wouldShort; a++)
-      for (let b = a + 1; b < pinRoots.length && !wouldShort; b++)
-        wouldShort = [...pinRoots[a]].some(r => pinRoots[b].has(r));
-
-    if (!wouldShort) {
+    if (!pinsAlreadySameNode) {
       for (let pi = 0; pi < pins.length; pi++)
         for (const w of pinWires[pi]) uf.union(pinKeys[pi], gk(w.from));
     }
   }
 
-  // 5. Wire-label net merging: any two labels with the same text get unioned.
+  // 5. Wire-label net merging
   const labelGroups = new Map<string, string[]>();
   for (const lbl of labels) {
-    const trimmed = lbl.text.trim();
-    if (!trimmed) continue;
-    if (!labelGroups.has(trimmed)) labelGroups.set(trimmed, []);
-    labelGroups.get(trimmed)!.push(gk(lbl.point));
+    const t = lbl.text.trim();
+    if (!t) continue;
+    if (!labelGroups.has(t)) labelGroups.set(t, []);
+    labelGroups.get(t)!.push(gk(lbl.point));
   }
-  for (const [, keys] of labelGroups) {
+  for (const [, keys] of labelGroups)
     for (let i = 1; i < keys.length; i++) uf.union(keys[0], keys[i]);
-  }
 
   // 6. Assign integer node numbers (ground root → 0)
   const nodeMap    = new Map<string, number>();
@@ -154,10 +151,7 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
     if (!nodeMap.has(root)) nodeMap.set(root, nextNode++);
   }
 
-  const nodeOfKey = (key: string): number | undefined => {
-    const root = uf.find(key);
-    return nodeMap.get(root);
-  };
+  const nodeOfKey = (key: string): number | undefined => nodeMap.get(uf.find(key));
   const nodeOf = (pin: { x: number; y: number }): number => {
     const n = nodeOfKey(gk(pin));
     if (n === undefined)
@@ -168,25 +162,122 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
     return n;
   };
 
-  // 7. Generate branches (skip OC — they have no branch in the netlist)
-  const branches = components
-    .filter(c => c.type !== 'OC')
-    .map(c => {
-      const base = {
-        type:  c.type as import('../types/circuit').BranchType,
-        n1:    nodeOf(c.pin1),
-        n2:    nodeOf(getPin2(c)),
-        value: c.value,
-      };
-      if (hasCtrlPins(c.type)) {
-        return {
-          ...base,
-          nc1: nodeOf(getCtrlPin1(c)),
-          nc2: nodeOf(getCtrlPin2(c)),
-        };
+  // ---------------------------------------------------------------------------
+  // Dependent-source resolution helpers
+  // ---------------------------------------------------------------------------
+
+  // Build varName → component lookup
+  const varNameMap = new Map<string, PlacedComponent>();
+  for (const c of components) {
+    const vn = c.varName?.trim();
+    if (vn) {
+      if (varNameMap.has(vn))
+        throw new Error(`Duplicate variable name "${vn}". Each component must have a unique label.`);
+      varNameMap.set(vn, c);
+    }
+  }
+
+  // Pre-compute VS branch order (needed for vs_ctrl_idx).
+  // Both 'V' (voltage source) and 'A' (current probe = 0 V source) emit V branches.
+  const vsOrder = new Map<string, number>(); // componentId → VS index among V branches
+  let vsIdx = 0;
+  for (const c of components) {
+    if (c.type === 'V' || c.type === 'A') vsOrder.set(c.id, vsIdx++);
+  }
+
+  /** Resolve a dependent source's controlling component, validating it exists. */
+  function resolveCtrl(c: PlacedComponent): PlacedComponent {
+    const cv = c.controlVar?.trim();
+    if (!cv)
+      throw new Error(
+        `Dependent source (${c.type}) has no control variable. ` +
+        `Click the component twice and set the "Control" field.`
+      );
+    const ctrl = varNameMap.get(cv);
+    if (!ctrl)
+      throw new Error(
+        `Control variable "${cv}" not found. ` +
+        `Label a component with that name using its inline editor.`
+      );
+    return ctrl;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 7. Build branches
+  // ---------------------------------------------------------------------------
+  const branches: Branch[] = [];
+
+  for (const c of components) {
+    if (c.type === 'OC') continue; // open circuit — no branch
+
+    const n1 = nodeOf(c.pin1);
+    const n2 = nodeOf(getPin2(c));
+
+    if (n1 === n2)
+      throw new Error(
+        `Both terminals are on the same electrical node (zero-length branch). ` +
+          `Spread the component pins onto different nodes — often caused by overlapping ` +
+          `this element with another or folding a wire onto itself.`,
+      );
+
+    // ── Independent elements ──────────────────────────────────────────────
+    if (c.type === 'R' || c.type === 'V' || c.type === 'I') {
+      branches.push({ type: c.type, n1, n2, value: c.value });
+      continue;
+    }
+
+    // ── Current Probe (ammeter, 0 V series source) ────────────────────────
+    // Emitted as a voltage source with value=0 so the MNA current unknown
+    // is available for CCCS/CCVS to reference via vs_ctrl_idx.
+    if (c.type === 'A') {
+      branches.push({ type: 'V', n1, n2, value: 0, displayType: 'A' });
+      continue;
+    }
+
+    // ── Voltage-controlled sources (G / E) ────────────────────────────────
+    if (c.type === 'G' || c.type === 'E') {
+      const ctrl = resolveCtrl(c);
+      const nc1  = nodeOf(ctrl.pin1);
+      const nc2  = nodeOf(getPin2(ctrl));
+      branches.push({ type: c.type, n1, n2, value: c.value, nc1, nc2 });
+      continue;
+    }
+
+    // ── Current-controlled sources (F / H) ────────────────────────────────
+    if (c.type === 'F' || c.type === 'H') {
+      const ctrl = resolveCtrl(c);
+
+      if (ctrl.type === 'R') {
+        // Current through resistor = V_ctrl / R
+        // → equivalent to voltage-controlled with gain/R
+        // Emit as G/E (solver already handles these) but keep displayType = F/H
+        const nc1      = nodeOf(ctrl.pin1);
+        const nc2      = nodeOf(getPin2(ctrl));
+        const gainEff  = c.value / ctrl.value;
+        const solveType: BranchType = c.type === 'F' ? 'G' : 'E';
+        branches.push({
+          type: solveType, n1, n2, value: gainEff, nc1, nc2,
+          displayType: c.type,
+        });
+        continue;
       }
-      return base;
-    });
+
+      if (ctrl.type === 'V' || ctrl.type === 'A') {
+        // Current through a VS or Current Probe = MNA extra unknown at nFree + vs_ctrl_idx
+        const vi = vsOrder.get(ctrl.id);
+        if (vi === undefined)
+          throw new Error(`Could not find voltage/probe "${ctrl.varName}" in netlist.`);
+        branches.push({ type: c.type, n1, n2, value: c.value, vs_ctrl_idx: vi });
+        continue;
+      }
+
+      throw new Error(
+        `${c.type === 'F' ? 'CCCS' : 'CCVS'} (controlVar="${c.controlVar}") references ` +
+        `a ${ctrl.type} component. Current-controlled sources must reference a ` +
+        `Current Probe (A), Resistor (I = V/R), or Voltage Source.`
+      );
+    }
+  }
 
   if (!groundPoint)
     console.warn('[toNetlist] No ground set – auto-assigned node 0 to first component pin.');
@@ -200,7 +291,7 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
   };
   for (const c of components) for (const pin of allPinsOf(c)) recordPin(pin);
   for (const w of wires) { recordPin(w.from); recordPin(w.to); }
-  for (const lbl of labels) recordPin(lbl.point);
+  for (const l of labels) recordPin(l.point);
 
   return {
     netlist:   { node_count: nextNode, branches },

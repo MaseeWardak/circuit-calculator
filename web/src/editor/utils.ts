@@ -43,11 +43,11 @@ export function getCtrlPin2(c: PlacedComponent): GridPoint {
 }
 
 /**
- * Returns true if this component type has control pins
- * (VCCS, VCVS, CCCS, CCVS).
+ * Dependent sources (G, E, F, H) are now 2-terminal.
+ * Control is specified via the controlVar reference, not physical pins.
  */
-export function hasCtrlPins(type: ComponentType): boolean {
-  return type === 'G' || type === 'E' || type === 'F' || type === 'H';
+export function hasCtrlPins(_type: ComponentType): boolean {
+  return false;
 }
 
 /**
@@ -80,10 +80,29 @@ export function gk(p: GridPoint): string {
   return `${p.x},${p.y}`;
 }
 
-export function formatValue(value: number, type: ComponentType): string {
+/**
+ * Maps a node voltage to a hue-based color for the visualization overlay.
+ * Low voltage → blue · mid → gold · high → red-orange.
+ */
+export function voltageToColor(v: number, vMin: number, vMax: number): string {
+  const t = vMax <= vMin ? 0.5 : Math.max(0, Math.min(1, (v - vMin) / (vMax - vMin)));
+  // Hue sweep: 215 (blue) → 43 (gold) → 0 (red)
+  const hue = t < 0.5
+    ? 215 - t * 2 * (215 - 43)
+    : 43  - (t - 0.5) * 2 * 43;
+  const lig = 30 + t * 12;
+  return `hsl(${hue.toFixed(0)}, 78%, ${lig.toFixed(0)}%)`;
+}
+
+export function formatValue(value: number, type: ComponentType, controlVar?: string): string {
+  const ctrl = controlVar?.trim() ? `·${controlVar.trim()}` : '';
   if (type === 'OC') return 'open';
-  if (type === 'E' || type === 'F')
-    return `×${value % 1 === 0 ? value.toFixed(0) : value.toPrecision(3)}`;
+  if (type === 'A')  return 'probe';
+
+  // Dependent sources: show as a plain multiplier (×β, ×μ, ×gm, ×rm).
+  // H (CCVS) omits the Ω unit — the CCVS badge already communicates the type.
+  if (type === 'E' || type === 'F' || type === 'H')
+    return `×${value % 1 === 0 ? value.toFixed(0) : value.toPrecision(3)}${ctrl}`;
 
   const abs  = Math.abs(value);
   const sign = value < 0 ? '−' : '';
@@ -98,7 +117,6 @@ export function formatValue(value: number, type: ComponentType): string {
     type === 'R' ? 'Ω' :
     type === 'V' ? 'V' :
     type === 'I' ? 'A' :
-    type === 'G' ? 'S' :
-    type === 'H' ? 'Ω' : '';
-  return num + unit;
+    type === 'G' ? 'S' : '';
+  return num + unit + ctrl;
 }
