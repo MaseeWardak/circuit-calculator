@@ -21,9 +21,11 @@ export type ComponentType = SolverBranchType | 'OC' | 'A';
 
 /**
  * Everything selectable in the palette, including the wire-label tool.
- * 'L' is not a component; it places a WireLabel marker instead.
+ * 'L'  — places a WireLabel marker.
+ * 'PA' — marks a circuit node as Thévenin/Norton Port A.
+ * 'PB' — marks a circuit node as Thévenin/Norton Port B.
  */
-export type ToolType = ComponentType | 'L';
+export type ToolType = ComponentType | 'L' | 'PA' | 'PB';
 
 /** A placed component on the schematic canvas. */
 export interface PlacedComponent {
@@ -89,4 +91,7 @@ export interface Schematic {
   labels:      WireLabel[];
   /** The grid point designated as node 0 (GND). */
   groundPoint: GridPoint | null;
+  /** Thévenin/Norton port terminals (must lie on a wire endpoint or component pin). */
+  portA:       GridPoint | null;
+  portB:       GridPoint | null;
 }

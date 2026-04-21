@@ -80,6 +80,20 @@ export function gk(p: GridPoint): string {
   return `${p.x},${p.y}`;
 }
 
+/**
+ * Maps a node voltage to a hue-based color for the visualization overlay.
+ * Low voltage → blue · mid → gold · high → red-orange.
+ */
+export function voltageToColor(v: number, vMin: number, vMax: number): string {
+  const t = vMax <= vMin ? 0.5 : Math.max(0, Math.min(1, (v - vMin) / (vMax - vMin)));
+  // Hue sweep: 215 (blue) → 43 (gold) → 0 (red)
+  const hue = t < 0.5
+    ? 215 - t * 2 * (215 - 43)
+    : 43  - (t - 0.5) * 2 * 43;
+  const lig = 30 + t * 12;
+  return `hsl(${hue.toFixed(0)}, 78%, ${lig.toFixed(0)}%)`;
+}
+
 export function formatValue(value: number, type: ComponentType, controlVar?: string): string {
   const ctrl = controlVar?.trim() ? `·${controlVar.trim()}` : '';
   if (type === 'OC') return 'open';

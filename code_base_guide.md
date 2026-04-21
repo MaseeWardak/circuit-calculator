@@ -1,49 +1,47 @@
-# Circuit Calculator — codebase guide
+# Mr Goose Circuit Calculator — codebase guide
 
-This repository is a **C++17** project that builds a small static library (`circuitcalc`) plus an optional command-line demo. The layout follows a common pattern: **public headers** under `include/`, **implementations** under `src/`, and **applications** under `apps/`.
+This repository is a **C++17** static library (`circuitcalc`) plus a **Vite + React** web app (`web/`) for **DC modified nodal analysis** of linear circuits. The in-browser **Solver** path uses the **TypeScript** MNA implementation (`web/src/lib/mna.ts`); the C++ code is the reference engine, optional **WASM** (when built and re-enabled in `solver.ts`), and the **CLI** demo.
+
+**Full file-by-file documentation** (1500+ lines) lives in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ## Directory layout
 
 | Path | Role |
 |------|------|
-| `CMakeLists.txt` | Root CMake project: C++ standard, `circuitcalc` library, optional `circuitcalc_cli` executable. |
-| `include/circuitcalc/` | Installed-style API: core utilities, netlist, and analysis headers. Consumers use `#include "circuitcalc/..."`. |
-| `src/` | `.cpp` files implementing the library (keeps compile times reasonable vs. header-only). |
-| `apps/cli/` | Thin `main.cpp` that demonstrates library usage (voltage divider). |
+| `CMakeLists.txt` | Root CMake: `circuitcalc` library, optional `circuitcalc_cli`, optional Emscripten WASM. |
+| `include/circuitcalc/` | Public C++ API: `netlist/`, `analysis/`, `core/`, `io/`, `circuit/`. |
+| `src/` | C++ implementations (MNA, matrix, JSON I/O, etc.). |
+| `apps/cli/` | `main.cpp` — small linear-DC examples. |
+| `apps/wasm/` | Emscripten `wasm_api.cpp` — JSON in/out for the browser. |
+| `web/` | **Mr Goose Circuit Calculator** UI: schematic editor, `toNetlist` (union–find), TS solver, results, Thévenin/Norton, solution steps, visualization. |
 
-### `include/circuitcalc/` modules
+## Web app (`web/`) at a glance
 
-- **`circuitcalc.hpp`** — Umbrella header that pulls in the main public types for quick experiments.
-- **`core/`** — Cross-cutting building blocks:
-  - `errors.hpp` — `circuit_error`, `singular_matrix_error` for solver failures.
-  - `units.hpp` — Helpers such as `apply_si_suffix` for human-entered values (e.g. `4.7` + `"k"`).
-  - `matrix.hpp` (+ `src/core/matrix.cpp`) — Dense matrix stored as a **row-major `double*` heap array**; Gaussian elimination with partial pivoting (no third-party linear algebra).
-- **`netlist/`** — `Netlist` stores ideal **resistors**, **current sources**, and **voltage sources** in **fixed-size C-style arrays** (`kMaxResistors`, etc.) with separate `*_count()` fields. Node `0` is the **reference (ground)**; all other nodes are non-negative integers.
-- **`analysis/`** — Solvers and result types:
-  - `analysis_result.hpp` (+ `src/analysis/analysis_result.cpp`) — `DcAnalysisResult` holds `double*` arrays for node voltages and floating-source currents, with `delete[]` in the destructor (RAII).
-  - `dc_solver.hpp` (+ `src/analysis/dc_solver.cpp`) — **Modified nodal analysis (MNA)** for linear DC resistive circuits: resistors stamp conductances; current sources contribute to the RHS; voltage sources are either **ground-referenced** (one terminal at node `0`, row constraint) or **floating** (extra MNA variable for source current).
+| Path | Role |
+|------|------|
+| `src/App.tsx` | Layout, solve pipeline, visualize toggle, Thévenin computation, circuit state. |
+| `src/editor/` | SVG canvas (`EditorCanvas`), palette, netlist conversion (`toNetlist.ts`), shapes. |
+| `src/lib/solver.ts` | Solver entry — **WASM load is currently disabled** (legacy binary vs JSON contract); uses `mna.ts`. |
+| `src/lib/mna.ts` | Canonical in-browser DC MNA (R, V, I, G, E, F, H, probes). |
+| `src/lib/solutionSteps.ts` | Builds collapsible educational “solution steps” after a successful solve. |
+| `src/types/circuit.ts` | Branch types and JSON-shaped types shared by solver and UI. |
+| `src/types/thevenin.ts` | `TheveninResult` for port A/B equivalent values. |
 
-## Data flow
-
-1. Build a `Netlist`: `set_node_count`, then `add_resistor` / `add_current_source` / `add_voltage_source`.
-2. Run `DcSolver::solve(netlist)` → `DcAnalysisResult` with `node_voltage[i]` = \(V_i\) (with \(V_0 = 0\)).
-
-## Build
-
-Configure and build with CMake (out-of-source build recommended):
+## Native C++ build
 
 ```bash
 cmake -S . -B build
 cmake --build build --config Release
 ```
 
-On Windows with MSVC, the demo binary is typically `build/Release/circuitcalc_cli.exe` (or under `build/` depending on the generator).
+On Windows with MSVC or MinGW, run the CLI from `build/` (see `ARCHITECTURE.md` §16).
 
-## Extension points (typical next steps)
+## Extension points
 
-- **Parser / front-end**: Read SPICE-like netlists or a custom schematic DSL into `Netlist`.
-- **AC / dynamics**: Add complex-valued MNA at frequency \(\omega\), or companion models for transient simulation.
-- **Numerics**: Swap the dense solver for a sparse direct or iterative solver as network size grows.
-- **Tests**: Add Catch2/GoogleTest under `tests/` and link against `circuitcalc`.
+- Regenerate WASM with current JSON schema and re-enable loading in `web/src/lib/solver.ts` if you want the C++ engine in the browser.
+- Add regression tests under `tests/` linking `circuitcalc`.
+- AC/transient analysis would extend MNA beyond linear DC.
 
-This file describes the **boilerplate structure** only; behavior is intentionally minimal and linear DC-focused.
+---
+
+*For editor UX (wires, junctions, node colours), dependent sources, and data flow diagrams, see [`ARCHITECTURE.md`](./ARCHITECTURE.md).*

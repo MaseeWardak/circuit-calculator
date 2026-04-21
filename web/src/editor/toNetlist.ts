@@ -84,6 +84,19 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
   }
 
   // 4. Component-pin T-junctions (with short-circuit guard).
+  //
+  // When a pin sits on the *interior* of a wire segment (not at that wire's
+  // endpoints), union the pin with one endpoint of that wire so it joins the
+  // backbone net.
+  //
+  // The old guard compared pin-root *sets* for different pins and skipped all
+  // unions if the sets shared *any* root.  Two pins on the same long wire each
+  // include uf.find(w.from) for that backbone — that is *not* a short between
+  // the component pins; it incorrectly skipped the unions and left mid-line
+  // points electrically disconnected from the wire (wrong node colours / solve).
+  //
+  // Only skip when this component's own pins are *already* the same node before
+  // these unions (redundant or degenerate placement).
   for (const c of components) {
     const pins    = allPinsOf(c);
     const pinKeys = pins.map(p => gk(p));
@@ -99,20 +112,13 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
     const anyTJunction = pinWires.some(pw => pw.length > 0);
     if (!anyTJunction) continue;
 
-    const pinRoots = pins.map((pin, pi) => {
-      const s = new Set([uf.find(pinKeys[pi])]);
-      for (const w of pinWires[pi]) s.add(uf.find(gk(w.from)));
-      return s;
-    });
+    const pinsAlreadySameNode =
+      pinKeys.length >= 2 && uf.find(pinKeys[0]) === uf.find(pinKeys[1]);
 
-    let wouldShort = false;
-    for (let a = 0; a < pinRoots.length && !wouldShort; a++)
-      for (let b = a + 1; b < pinRoots.length && !wouldShort; b++)
-        wouldShort = [...pinRoots[a]].some(r => pinRoots[b].has(r));
-
-    if (!wouldShort)
+    if (!pinsAlreadySameNode) {
       for (let pi = 0; pi < pins.length; pi++)
         for (const w of pinWires[pi]) uf.union(pinKeys[pi], gk(w.from));
+    }
   }
 
   // 5. Wire-label net merging
@@ -206,6 +212,13 @@ export function schematicToNetlistWithNodeMap(schematic: Schematic): NetlistWith
 
     const n1 = nodeOf(c.pin1);
     const n2 = nodeOf(getPin2(c));
+
+    if (n1 === n2)
+      throw new Error(
+        `Both terminals are on the same electrical node (zero-length branch). ` +
+          `Spread the component pins onto different nodes — often caused by overlapping ` +
+          `this element with another or folding a wire onto itself.`,
+      );
 
     // ── Independent elements ──────────────────────────────────────────────
     if (c.type === 'R' || c.type === 'V' || c.type === 'I') {

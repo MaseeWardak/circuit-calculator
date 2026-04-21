@@ -31,7 +31,8 @@ by someone who wants to understand the full system before touching any code.
    - 9.2 [Root component — `App.tsx`](#92-root-component--apptsx)
    - 9.3 [Shared circuit types — `types/circuit.ts`](#93-shared-circuit-types--typescircuitts)
    - 9.4 [Solver gateway — `lib/solver.ts`](#94-solver-gateway--libsolverts)
-   - 9.5 [TypeScript MNA fallback — `lib/mna.ts`](#95-typescript-mna-fallback--libmnats)
+   - 9.5 [TypeScript MNA — `lib/mna.ts`](#95-typescript-mna--libmnats)
+   - 9.6 [Solution steps — `lib/solutionSteps.ts`](#96-solution-steps--libsolutionstepsts)
 10. [Schematic editor subsystem — `editor/`](#10-schematic-editor-subsystem--editor)
     - 10.1 [Constants — `constants.ts`](#101-constants--constantsts)
     - 10.2 [Types — `types.ts`](#102-types--typests)
@@ -51,17 +52,19 @@ by someone who wants to understand the full system before touching any code.
 
 ## 1. Project overview
 
-Circuit Calculator is a browser-based DC circuit analysis tool. A user drags
-resistors, voltage sources, and current sources onto an interactive SVG canvas,
-connects them with wires, and clicks **Solve**. The application converts the
-visual schematic into a solver netlist, runs Modified Nodal Analysis (MNA) to
-find every node voltage and branch current, then displays the results alongside
-the schematic with colour-coded node overlays.
+**Mr Goose Circuit Calculator** is a browser-based DC circuit analysis tool. A user places
+resistors, sources (including dependent sources), probes, and net labels on an interactive
+SVG canvas, wires them, sets ground, and clicks **Solve**. The schematic is converted to a
+netlist with union–find; **Modified Nodal Analysis (MNA)** yields node voltages and branch
+currents. Results appear in the side panel with colour-coded node overlays on the schematic,
+optional **current/voltage visualization**, **Thévenin/Norton** equivalents at marked ports,
+and **collapsible solution steps** for teaching.
 
-The numerically heavy work lives in a C++17 library (`circuitcalc`) that is
-compiled to WebAssembly via Emscripten and loaded dynamically in the browser.
-A TypeScript reimplementation of the same algorithm serves as a fallback so the
-UI works even without the WASM binary present.
+The **production browser path uses the TypeScript solver** (`web/src/lib/mna.ts`): it tracks
+the full branch model (VCCS, VCVS, CCCS, CCVS, current probes). The C++ library (`circuitcalc`)
+remains the reference implementation and powers the CLI; a WebAssembly build exists, but
+**WASM loading in `solver.ts` is intentionally disabled** until a binary is rebuilt that matches
+the current JSON netlist contract (older WASM crashes on dependent-source payloads).
 
 The project simultaneously demonstrates:
 
@@ -124,10 +127,12 @@ circuit-calculator/
         ├── App.tsx             Root component, solve orchestration
         ├── index.css           Global styles + Waterloo gold theme
         ├── types/
-        │   └── circuit.ts      Shared TS types matching the JSON contract
+        │   ├── circuit.ts      Branch / JSON contract types (solver + UI)
+        │   └── thevenin.ts     Thévenin/Norton result type
         ├── lib/
-        │   ├── solver.ts       WASM loader + fallback dispatch
-        │   └── mna.ts          TypeScript MNA solver (fallback)
+        │   ├── solver.ts       Solver entry (WASM optional; TS path active)
+        │   ├── mna.ts          TypeScript MNA (canonical in-browser engine)
+        │   └── solutionSteps.ts  Human-readable solution walkthrough
         ├── editor/
         │   ├── constants.ts    Grid dimensions, node colours
         │   ├── types.ts        PlacedComponent, Wire, Schematic types
@@ -137,7 +142,7 @@ circuit-calculator/
         │   ├── toNetlist.ts    Union-Find schematic → netlist converter
         │   └── EditorCanvas.tsx    Interactive SVG canvas
         └── components/
-            └── ResultsPanel.tsx    Solved results table
+            └── ResultsPanel.tsx    Results, steps, Thévenin/Norton section
 ```
 
 ---
@@ -146,12 +151,12 @@ circuit-calculator/
 
 | Layer | Technology | Why |
 |---|---|---|
-| Core solver | C++17 | Demonstrates systems-level skill; the numerically intensive path is in C++ |
+| Core solver | C++17 | Reference library + CLI; WASM optional when rebuilt and enabled |
 | Build | CMake 3.20+ | Standard for cross-platform C++ including WASM targets |
 | WASM bridge | Emscripten + `--bind` | Zero-dependency, runs in every modern browser |
 | Frontend framework | React 18 + TypeScript | Strong typing for complex state; JSX for SVG composition |
 | Bundler | Vite | Near-instant HMR; handles dynamic asset imports |
-| Solver fallback | TypeScript (same algorithm) | UI works before WASM is built; mirrors C++ line-for-line |
+| In-browser solver | TypeScript (`mna.ts`) | Full DC MNA including controlled sources; primary engine |
 
 ---
 
@@ -816,35 +821,27 @@ catch side-effect bugs. It has no effect in production.
 
 ### 9.2 Root component — `App.tsx`
 
-`App.tsx` is the central state machine. It owns:
+`App.tsx` is the central state machine (product title: **Mr Goose Circuit Calculator**). It owns:
 
 | State variable | Type | Description |
 |---|---|---|
-| `schematic` | `Schematic` | The full visual circuit (components + wires + ground) |
-| `pendingType` | `BranchType \| null` | Component being placed from palette |
+| `schematic` | `Schematic` | Components, wires, labels, ground, optional **Port A / Port B** for Thévenin |
+| `pendingType` | `ToolType \| null` | Palette tool (includes `L`, `PA`, `PB`, probes, etc.) |
 | `result` | `SolveResult \| null` | Last solver output |
 | `solving` | `boolean` | True while async solve is in flight |
-| `solveError` | `string \| null` | Error from schematic-to-netlist conversion |
-| `showNetlist` | `boolean` | Toggle for the raw JSON debug panel |
-| `pinToNode` | `Map<string,number> \| null` | gk(pin) → nodeId, for canvas overlays |
-| `nodeVoltages` | `number[] \| null` | Indexed by nodeId, from solve result |
+| `solveError` | `string \| null` | Netlist or solver errors |
+| `netlistBranches` | `Branch[]` | Branch list from last conversion (results + visualization) |
+| `animateMode` | `boolean` | Voltage colouring + current-flow overlay on wires |
+| `pinToNode` | `Map<string,number> \| null` | `gk(pin)` → node id for canvas overlays |
+| `nodeVoltages` | `number[] \| null` | Indexed by node id |
+| `circuitInput` | `CircuitInput \| null` | Last netlist passed to **solution steps** |
+| `theveninResult` | `TheveninResult \| null` | Computed when both ports are placed and solve succeeds |
 
-**`handleSchematicChange`** is passed to `EditorCanvas` as the `onChange` prop.
-Whenever the user modifies the circuit (place, move, delete, wire), this resets
-`result`, `pinToNode`, and `nodeVoltages` to null — ensuring stale node overlays
-never persist after the circuit changes.
+**`handleSchematicChange`** resets stale solve results, overlays, visualization, Thévenin, and circuit-input cache whenever the schematic edits.
 
-**`handleSolve`** orchestrates the full pipeline:
-1. Calls `schematicToNetlistWithNodeMap(schematic)` to get both the solver
-   netlist and the `pinToNode` map.
-2. Awaits `solve(netlist)` from `lib/solver.ts`.
-3. If successful, stores `pinToNode` and `node_voltages` in state — this triggers
-   the canvas to render node rings and hover badges.
-4. On any exception (bad topology, disconnected pins), sets `solveError`.
+**`handleSolve`** runs `schematicToNetlistWithNodeMap` → `solve(netlist)` → on success stores overlays; if **Port A** and **Port B** are set on the schematic, runs **`computeThevenin`** (short-circuit current + fallback test source for \(R_\mathrm{th}\)).
 
-**`handleClear`** resets everything to the empty schematic.
-
-The layout is a CSS Grid: palette (158 px) | canvas (flexible) | results (300 px).
+The layout is a CSS Grid: palette (158 px) \| canvas \| results (300 px); narrow viewports stack columns.
 
 ---
 
@@ -856,6 +853,8 @@ This file defines the **JSON contract** shared between:
 - The netlist converter (`editor/toNetlist.ts`)
 - The results display (`components/ResultsPanel.tsx`)
 
+Core shapes (abbreviated):
+
 ```typescript
 export interface CircuitInput {
   node_count: number;
@@ -863,10 +862,12 @@ export interface CircuitInput {
 }
 
 export interface Branch {
-  type: BranchType;   // 'R' | 'V' | 'I'
-  n1: number;         // node index (0 = ground)
-  n2: number;
-  value: number;      // ohms / volts / amperes
+  type: BranchType;          // 'R' | 'V' | 'I' | 'G' | 'E' | 'F' | 'H'
+  n1: number; n2: number;
+  value: number;
+  nc1?: number; nc2?: number;      // control nodes (G / E)
+  vs_ctrl_idx?: number;             // CCCS / CCVS → controlling VS row
+  displayType?: DisplayBranchType;  // UI e.g. probe as 'A'
 }
 
 export type SolveResult =
@@ -874,64 +875,37 @@ export type SolveResult =
   | { ok: false; error: string };
 ```
 
-The discriminated union `SolveResult` means every consumer must handle both
-the success and failure cases — TypeScript enforces this at compile time.
+The discriminated union `SolveResult` forces callers to handle success and failure.
 
-`BRANCH_LABELS` is a lookup table used by the results panel to display
-human-readable names and units for each branch type.
+`BRANCH_LABELS` drives labels and units in **ResultsPanel**. Dependent-source metadata is documented in `editor/types.ts` (`varName` / `controlVar` on placed components).
 
 ---
 
 ### 9.4 Solver gateway — `lib/solver.ts`
 
-This module abstracts over two solver backends:
+`export async function solve(input)` dispatches to the active backend. **Today,
+`tryLoadWasm()` returns `null` immediately** (and logs that WASM is disabled):
+the shipped Emscripten binary predates the extended JSON netlist (dependent
+sources, `vs_ctrl_idx`, etc.) and aborts if loaded. **All production solves use**
+`solveCircuit` from **`lib/mna.ts`**.
 
-```typescript
-let wasmModule: WasmModule | null = null;
+To restore WASM after rebuilding `circuitcalc_wasm` with the current JSON I/O:
 
-async function tryLoadWasm(): Promise<WasmModule | null> {
-  // 1. Inject <script src="/wasm/circuitcalc_wasm.js"> into document.head
-  // 2. Await its load event
-  // 3. Call window.createCircuitCalc() to instantiate the WASM module
-  // 4. Return the module object (which has .solve_circuit method)
-  // On any failure: return null (triggers fallback)
-}
+1. Place `circuitcalc_wasm.js` + `.wasm` under `web/public/wasm/`.
+2. Re-implement `tryLoadWasm()` to load the script / instantiate the module.
+3. Verify parity on a circuit with G/E/F/H branches.
 
-export async function solve(input: CircuitInput): Promise<SolveResult> {
-  const wasm = await tryLoadWasm();
-  if (wasm) {
-    const json = wasm.solve_circuit(JSON.stringify(input));
-    return JSON.parse(json) as SolveResult;
-  }
-  return solveTs(input);  // TypeScript fallback
-}
-```
-
-**WASM loading strategy**: the script is injected at runtime (not imported
-statically) because:
-1. The `.js` file is in `public/wasm/`, which is outside Vite's module graph.
-2. It needs to be loaded as a plain global script (it assigns to
-   `window.createCircuitCalc`), not as an ES module.
-3. This avoids any build-time dependency on the WASM artefacts — the app
-   compiles and runs fine without them.
-
-`wasmLoadAttempted` is a module-level boolean that ensures the script is only
-injected once, regardless of how many times `solve` is called.
-
-The WASM call path: `JSON.stringify(input)` → C++ `solve_circuit(str)` → parses
-JSON → runs MNA → returns JSON → `JSON.parse` → `SolveResult`.
-
-The TypeScript fallback path: `solveTs(input)` calls the exported function from
-`lib/mna.ts` directly (synchronous, wrapped in a resolved promise for API
-uniformity).
+Until then, the TypeScript path is the single source of truth in the browser.
 
 ---
 
-### 9.5 TypeScript MNA fallback — `lib/mna.ts`
+### 9.5 TypeScript MNA — `lib/mna.ts`
 
-This is a line-for-line TypeScript port of the C++ `DcSolver`. It exists so the
-UI is functional even when the WASM binary has not been built. The algorithm is
-identical; the differences are:
+This module implements **full DC MNA** for the branch types the UI emits (including
+VCCS, VCVS, CCCS, CCVS, and current probes as 0 V sources). It is **not** a legacy
+fallback — it is the engine users run. Compared to the original C++ resistive
+solver, it extends stamping and unknown counting for controlled sources. Differences
+vs the C++ core implementation:
 
 | C++ | TypeScript |
 |---|---|
@@ -946,6 +920,17 @@ The `gaussianElim` function takes a flat row-major `number[]` for `A` and a
 
 `unkIdx(node)` mirrors `unknown_index(node)` in `dc_solver.cpp`: returns
 `node - 1` for non-ground nodes, `-1` for ground.
+
+---
+
+### 9.6 Solution steps — `lib/solutionSteps.ts`
+
+After a successful solve, **`generateSolutionSteps`** builds a list of **`SolutionSection`**
+blocks (circuit inventory, “method used”, per-node KCL-style explanations, solved
+voltages, branch currents, optional power balance). **`ResultsPanel`** renders them as
+collapsible panels when `circuitInput` is passed from **`App.tsx`**. This layer is purely
+presentational — it consumes the solved voltages/currents **retrospectively** and does not
+duplicate the Gaussian elimination numerically except for arithmetic checks like KCL sums.
 
 ---
 
@@ -991,31 +976,32 @@ ring overlays and in `ResultsPanel` for the colour-coded node table.
 
 ---
 
-### 10.2 Types — `types.ts`
+### 10.2 Types — `editor/types.ts`
+
+Defines **palette / canvas** structure (solver JSON types live in **`types/circuit.ts`**).
 
 ```typescript
-export type BranchType = 'R' | 'V' | 'I';
-
-export interface GridPoint { x: number; y: number; }
+export type SolverBranchType = 'R' | 'V' | 'I' | 'G' | 'E' | 'F' | 'H';
+export type ComponentType = SolverBranchType | 'OC' | 'A';  // OC open, A probe
+export type ToolType = ComponentType | 'L' | 'PA' | 'PB';     // labels + Thévenin ports
 
 export interface PlacedComponent {
-  id: string;           // crypto.randomUUID()
-  type: BranchType;
-  value: number;
-  pin1: GridPoint;      // position of the first terminal
-  rotation: 0 | 90 | 180 | 270;  // degrees CW
-}
-
-export interface Wire {
   id: string;
-  from: GridPoint;
-  to: GridPoint;
+  type: ComponentType;
+  value: number;
+  pin1: GridPoint;
+  rotation: 0 | 90 | 180 | 270;
+  varName?: string;       // measured quantity name for others to reference
+  controlVar?: string;    // for G/E/F/H — references a varName
 }
 
 export interface Schematic {
   components: PlacedComponent[];
   wires: Wire[];
-  groundPoint: GridPoint | null;  // node 0 (GND) location
+  labels: WireLabel[];
+  groundPoint: GridPoint | null;
+  portA: GridPoint | null;     // Thévenin/Norton terminal a
+  portB: GridPoint | null;      // terminal b
 }
 ```
 
@@ -1043,7 +1029,7 @@ export function toScreen(p: GridPoint): { x: number; y: number }
 export function snapToGrid(screenX: number, screenY: number): GridPoint
 export function gridEq(a: GridPoint | null, b: GridPoint | null): boolean
 export function gk(p: GridPoint): string          // canonical key "x,y"
-export function formatValue(value: number, type: BranchType): string
+export function formatValue(value: number, type: ComponentType, controlVar?: string): string
 ```
 
 **`getPin2`** uses a `switch` on `rotation` to compute the second pin's grid
@@ -1092,19 +1078,18 @@ change the colour for selection states without duplicating the shape code.
 
 ### 10.5 Palette sidebar — `Palette.tsx`
 
-A simple presentational component. It renders three clickable buttons (one per
-component type) and a keyboard shortcut reference.
+Grouped buttons (Independent / Dependent / Utility / Analysis) plus a static shortcut list.
+`ToolType` covers branch devices, wire labels (`L`), and Thévenin ports (`PA`, `PB`).
 
 Props:
 ```typescript
 interface Props {
-  selected: BranchType | null;
-  onSelect: (t: BranchType | null) => void;
+  selected: ToolType | null;
+  onSelect: (t: ToolType | null) => void;
 }
 ```
 
-Clicking a button that is already active deselects it (returns to idle mode).
-Clicking a new button activates placement mode for that type.
+Toggle behaviour: clicking the active tool again clears selection.
 
 The shortcut list is static. It documents the current interaction model:
 click palette → place, Shift+click → keep placing, R → cycle rotation
@@ -1150,19 +1135,14 @@ electrical graph (wires + connections) becomes one equivalence class in the UF.
    another wire segment (not at its endpoints), union them. This handles the case
    where a vertical wire meets a horizontal wire mid-segment.
 
-4. **Component-pin T-junctions (with short-circuit guard)** — if a component
-   pin lies strictly inside a wire segment, union them. However, if doing so
-   would put *both pins of the same component* into the same UF class (a
-   short circuit through the wire), the T-junction is skipped entirely. This
-   prevents a current source whose two pins lie on the same wire from being
-   incorrectly short-circuited.
-
-   ```typescript
-   const p1Roots = new Set([uf.find(p1Key), ...p1Wires.map(w => uf.find(gk(w.from)))]);
-   const p2Roots = new Set([uf.find(p2Key), ...p2Wires.map(w => uf.find(gk(w.from)))]);
-   const wouldShort = [...p1Roots].some(r => p2Roots.has(r));
-   if (!wouldShort) { /* apply T-junctions */ }
-   ```
+4. **Component-pin T-junctions** — if a pin lies strictly **inside** a wire segment
+   (not at that wire's endpoints), `union(pin, wire.from)` attaches the device to the
+   backbone net. **Guard:** unions are skipped only when **both pins of this device**
+   already map to the **same** UF root *before* these merges (already one electrical
+   node — redundant/degenerate). An older heuristic skipped when *any* root overlapped
+   between the two pins’ attachment sets — that falsely treated two pins on the same
+   **long wire** as a “short” and **disconnected** them from the sketch (wrong colours,
+   bogus nodes). That logic was removed.
 
 5. **Node numbering** — the UF root of the ground point (or fallback) is assigned
    node ID 0. All other roots are assigned sequential integers 1, 2, 3, ...
@@ -1302,20 +1282,13 @@ selection → cancels placement/wiring in order.
 
 ## 11. Results panel — `components/ResultsPanel.tsx`
 
-A presentational component that renders the solved values in two tables.
+Presentational panel for **node voltages**, **branch currents**, optional **solution steps**
+(`circuitInput` + `generateSolutionSteps`), and optional **Thévenin/Norton**
+(`thevenin` prop: \(V_\mathrm{th}\), \(I_\mathrm{N}\), \(R_\mathrm{th}\), small diagrams).
 
-**Node voltages table**: one row per node. Each row shows a coloured dot
-(from `NODE_COLORS`) matching the canvas overlay colour, the node name
-(`N0 — GND`, `N1`, etc.), and the voltage with SI prefix formatting.
-
-**Branch currents table**: one row per component in the order they were placed.
-The `branches` prop (passed from `App.tsx`) provides the type and node indices.
-A pair of coloured dots shows which two nodes the branch connects. The current
-value is formatted with `fmt()` which uses SI prefixes (M, k, m, µ, n).
-
-When `result` is null, a placeholder message instructs the user to build a
-circuit and click Solve. When `result.ok` is false, the error message is shown
-in a red alert box.
+Formatting uses SI-style prefixes. Control / probe nodes (`nc1`/`nc2`) appear for dependent
+sources. When `result` is null, a short empty state appears; errors from netlist conversion
+surface in **`App.tsx`** above the panel.
 
 ---
 
@@ -1363,56 +1336,31 @@ permanent screen space.
 
 ## 13. End-to-end data flow
 
-Here is the complete sequence from user gesture to displayed result:
+Here is the sequence from gesture to displayed result (**current shipping path**):
 
 ```
-User clicks "⚡ Solve" in App.tsx
+User clicks Solve in App.tsx
   │
   ▼
 schematicToNetlistWithNodeMap(schematic)              [toNetlist.ts]
-  ├── makeUF()
-  ├── seed all pins + wire endpoints
-  ├── union wire endpoints
-  ├── wire-on-wire T-junction detection
-  ├── component-pin T-junction detection (with short-circuit guard)
-  ├── assign node numbers (ground → 0)
-  ├── generate branches[] with n1, n2 from node map
-  └── returns { netlist: CircuitInput, pinToNode: Map<string,number> }
+  ├── Union–Find: pins, wires, wire–wire & component T-junctions,
+  │   net labels (short-circuit guard only when both device pins already share a node)
+  ├── assign integer nodes (reference ground → 0)
+  └── { netlist, pinToNode }
   │
   ▼
-solve(netlist)                                         [lib/solver.ts]
-  ├── tryLoadWasm()
-  │     ├── inject <script> for circuitcalc_wasm.js
-  │     ├── await script.onload
-  │     └── call window.createCircuitCalc() → WasmModule
-  │
-  ├── [WASM path] JSON.stringify(netlist)
-  │     → C++ solve_circuit(json_string)              [wasm_api.cpp]
-  │         → parse_netlist_json()                    [json_io.cpp]
-  │         → DcSolver::solve()                       [dc_solver.cpp]
-  │             → Matrix::solve_gaussian()            [matrix.cpp]
-  │         → result_to_json()                        [json_io.cpp]
-  │     ← JSON string
-  │     → JSON.parse() → SolveResult
-  │
-  └── [TS fallback] solveCircuit(netlist)             [lib/mna.ts]
-        → gaussianElim()
-        → SolveResult
+solve(netlist) → solveCircuit(netlist)                [lib/solver.ts → lib/mna.ts]
+  └── Gaussian elimination → SolveResult
+      (WASM intentionally disabled until binary matches JSON schema)
   │
   ▼
-App.tsx receives SolveResult
-  ├── setResult(r)
-  ├── setPinToNode(pinToNode)
-  └── setNodeVoltages(r.node_voltages)
+App.tsx stores result + pinToNode + node_voltages (+ circuitInput for steps,
+  + computeThevenin if ports A/B placed)
   │
   ▼
 React re-render
-  ├── EditorCanvas receives nodeHighlights, nodeVoltages as props
-  │     → renders coloured rings on every pin
-  │     → renders hover badges (shown on pin mouseover)
-  └── ResultsPanel receives result, branches as props
-        → renders node voltage table (coloured dots)
-        → renders branch current table
+  ├── EditorCanvas — node rings, optional Visualize overlay
+  └── ResultsPanel — tables, steps, Thévenin/Norton block
 ```
 
 ---
@@ -1442,14 +1390,13 @@ The results panel displays raw values from the solver without sign inversion.
 
 | Constraint | Value | Location |
 |---|---|---|
-| Max circuit nodes | 256 | `DcAnalysisResult::kMaxNodes` |
-| Max resistors | 256 | `Netlist::kMaxResistors` |
-| Max current sources | 128 | `Netlist::kMaxCurrentSources` |
-| Max voltage sources | 64 | `Netlist::kMaxVoltageSources` |
-| Max branches in JSON | 448 | `ParsedCircuit::kMaxBranches` (sum of above) |
+| Max circuit nodes | 256 | `DcAnalysisResult::kMaxNodes` (C++ limits) |
 | Canvas grid | 20 × 14 cells | `constants.ts` |
-| Supported element types | R, V, I (DC linear) | `BranchType` |
+| **Browser solver branch types** | R, V, I, G, E, F, H (+ display `A`) | `types/circuit.ts`, `toNetlist.ts`, `mna.ts` |
 | Rotation steps | 0°, 90°, 180°, 270° | `PlacedComponent.rotation` |
+
+The **TypeScript** solver does not use the C++ fixed array caps for normal operation;
+the **C++ / WASM** JSON parser still enforces its own maximum branch counts when WASM is used.
 
 **Non-linear elements** (diodes, transistors, capacitors, inductors) are not
 supported. The MNA formulation is DC only. Adding AC analysis would require
@@ -1459,12 +1406,12 @@ complex-number arithmetic and impedance stamping.
 technically allows arbitrary endpoints, but the UI only snaps to integer grid
 points, so diagonal wires can only appear if programmatically constructed.
 
-**Short-circuit detection**: the solver reports a `singular_matrix_error` when
-the MNA matrix is singular. This catches floating nodes (a node with no path to
-ground) and direct voltage source shorts. It does not detect all topological
-errors — a current source across a voltage source, for example, is technically
-ill-defined but may or may not produce a singular matrix depending on the rest
-of the circuit.
+**Singular / ill-posed circuits**: `mna.ts` errors on a singular matrix (floating nets,
+ideal contradictions). **`toNetlist.ts`** rejects **zero-length branches** (both pins of a
+component on the same net) with an explicit message.
+
+**Diagonal components**: pins lie on integer grid cells; wires are orthogonal segments.
+A “diagonal” resistor is drawn with a rotated SVG — pins stay on the grid lattice.
 
 ---
 
@@ -1510,17 +1457,9 @@ npm install
 npm run dev          # starts Vite dev server at http://localhost:5173
 ```
 
-With the WASM files in `web/public/wasm/`, the browser console will print:
-```
-[solver] Using C++ WASM engine.
-```
-
-Without them, it prints:
-```
-[solver] WASM not available – using TypeScript fallback solver.
-```
-
-Both paths produce numerically identical results.
+With WASM **disabled** in source, the console logs that the **TypeScript** solver is used.
+After rebuilding WASM and re-enabling `tryLoadWasm()`, verify controlled-source circuits
+against `mna.ts` before shipping.
 
 ### Production build
 

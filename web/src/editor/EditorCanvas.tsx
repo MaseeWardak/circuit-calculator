@@ -1,18 +1,103 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type {
   ComponentType, GridPoint, PlacedComponent, Schematic, ToolType, Wire, WireLabel,
 } from './types';
+import type { Branch } from '../types/circuit';
 import { ComponentShape, GroundSymbol } from './ComponentShape';
 import {
   CANVAS_COLS, CANVAS_H, CANVAS_ROWS, CANVAS_W,
   COMP_PX, GRID, NODE_COLORS, PIN_R,
 } from './constants';
 import {
-  allPinsOf, formatValue,
+  allPinsOf, formatValue, voltageToColor,
   getPin2, gk, gridEq, hasCtrlPins, snapToGrid, toScreen,
 } from './utils';
 
 function uid(): string { return crypto.randomUUID(); }
+
+// ── Visualization helpers ────────────────────────────────────────────────────
+
+/**
+ * Compute per-component-pin outward current (positive = current exits pin into wire).
+ * Convention follows MNA branch current sign:
+ *   V-source-like (V, E, H, A→V): pin1 = +I, pin2 = −I
+ *   Current-source-like (R, I, G, F): pin1 = −I, pin2 = +I
+ */
+function computePinFlows(
+  components: PlacedComponent[],
+  netlistBranches: Branch[],
+  branchCurrents: number[],
+): Map<string, number> {
+  const map = new Map<string, number>();
+  let brIdx = 0;
+  for (const c of components) {
+    if (c.type === 'OC') continue;
+    const I  = branchCurrents[brIdx] ?? 0;
+    const br = netlistBranches[brIdx];
+    brIdx++;
+
+    if (!br || Math.abs(I) < 1e-15) continue;
+    const p1k = gk(c.pin1);
+    const p2k = gk(getPin2(c));
+    const bt  = br.type;
+    // V, E, H are voltage-source-like (extra unknown = current entering n1)
+    const vsLike = bt === 'V' || bt === 'E' || bt === 'H';
+    map.set(p1k, (map.get(p1k) ?? 0) + (vsLike ? +I : -I));
+    map.set(p2k, (map.get(p2k) ?? 0) + (vsLike ? -I : +I));
+  }
+  return map;
+}
+
+/**
+ * Determine flow direction (+1 = from→to, −1 = to→from, 0 = unknown) for every wire.
+ * Uses component-pin currents at wire endpoints, then propagates via BFS through
+ * wire chains where neither endpoint is a component pin.
+ */
+function computeWireFlows(
+  wires: Wire[],
+  pinFlows: Map<string, number>,
+): Map<string, number> {
+  const flow = new Map<string, number>();
+
+  // Pass 1: wires with at least one component-pin endpoint
+  for (const w of wires) {
+    const fOut = pinFlows.get(gk(w.from)) ?? 0;
+    const tOut = pinFlows.get(gk(w.to))   ?? 0;
+    if (Math.abs(fOut) > 1e-15) {
+      flow.set(w.id, fOut > 0 ? 1 : -1);
+    } else if (Math.abs(tOut) > 1e-15) {
+      flow.set(w.id, tOut > 0 ? -1 : 1);
+    }
+  }
+
+  // Pass 2: BFS propagation through intermediate wire segments
+  const epWires = new Map<string, Array<{ w: Wire; isFrom: boolean }>>();
+  for (const w of wires) {
+    const fk = gk(w.from), tk = gk(w.to);
+    if (!epWires.has(fk)) epWires.set(fk, []);
+    if (!epWires.has(tk)) epWires.set(tk, []);
+    epWires.get(fk)!.push({ w, isFrom: true });
+    epWires.get(tk)!.push({ w, isFrom: false });
+  }
+
+  const queue = [...flow.keys()];
+  const visited = new Set<string>(queue);
+  while (queue.length > 0) {
+    const wid   = queue.shift()!;
+    const w     = wires.find(x => x.id === wid);
+    if (!w) continue;
+    const dir   = flow.get(wid)!;
+    const exitK = dir > 0 ? gk(w.to) : gk(w.from);
+    for (const { w: adj, isFrom } of (epWires.get(exitK) ?? [])) {
+      if (visited.has(adj.id)) continue;
+      flow.set(adj.id, isFrom ? 1 : -1);
+      visited.add(adj.id);
+      queue.push(adj.id);
+    }
+  }
+
+  return flow;
+}
 
 type Rotation = 0 | 90 | 180 | 270;
 function nextRotation(r: Rotation): Rotation {
@@ -49,11 +134,12 @@ function defaultValue(type: ComponentType): number {
     case 'R':  return 1000;
     case 'V':  return 5;
     case 'I':  return 0.001;
-    case 'G':  return 0.01;   // 10 mS
-    case 'E':  return 2;      // voltage gain
-    case 'F':  return 50;     // current gain β
-    case 'H':  return 1000;   // transresistance (Ω)
+    case 'G':  return 0.01;
+    case 'E':  return 2;
+    case 'F':  return 50;
+    case 'H':  return 1000;
     case 'OC': return 0;
+    case 'A':  return 0;
   }
 }
 
@@ -112,11 +198,16 @@ interface Props {
   nodeHighlights?:     Map<string, number> | null;
   nodeVoltages?:       number[] | null;
   placementHint?:      string;
+  // Visualization overlay
+  animateMode?:        boolean;
+  branchCurrents?:     number[] | null;
+  netlistBranches?:    Branch[] | null;
 }
 
 export default function EditorCanvas({
   schematic, onChange, pendingType, onPendingTypeChange,
   nodeHighlights, nodeVoltages, placementHint,
+  animateMode, branchCurrents, netlistBranches,
 }: Props) {
   const svgRef = useRef<SVGSVGElement>(null);
 
@@ -138,6 +229,37 @@ export default function EditorCanvas({
   dragStateRef.current   = dragState;
   schematicRef.current   = schematic;
   selectedIdRef.current  = selectedId;
+
+  // ── Visualization data ─────────────────────────────────────────────────────
+
+  const vMin = nodeVoltages ? Math.min(...nodeVoltages) : 0;
+  const vMax = nodeVoltages ? Math.max(...nodeVoltages) : 0;
+
+  // Per-pin outward currents (needed for wire flow direction)
+  const pinFlows = useMemo(() =>
+    animateMode && branchCurrents && netlistBranches
+      ? computePinFlows(schematic.components, netlistBranches, branchCurrents)
+      : new Map<string, number>(),
+    [animateMode, branchCurrents, netlistBranches, schematic.components],
+  );
+
+  // Per-wire flow direction: +1 from→to, −1 to→from, 0 unknown
+  const wireFlows = useMemo(() =>
+    animateMode ? computeWireFlows(schematic.wires, pinFlows) : new Map<string, number>(),
+    [animateMode, schematic.wires, pinFlows],
+  );
+
+  // Per-component branch current (for current direction arrows)
+  const componentCurrents = useMemo(() => {
+    if (!animateMode || !branchCurrents) return new Map<string, number>();
+    const map = new Map<string, number>();
+    let brIdx = 0;
+    for (const c of schematic.components) {
+      if (c.type === 'OC') continue;
+      map.set(c.id, branchCurrents[brIdx++] ?? 0);
+    }
+    return map;
+  }, [animateMode, branchCurrents, schematic.components]);
 
   // ── helpers ───────────────────────────────────────────────────────────────
 
@@ -286,6 +408,14 @@ export default function EditorCanvas({
     const pt = getSvgPoint(e);
     if (!pt) return;
 
+    // ── place port A / B marker ──
+    if (pendingType === 'PA' || pendingType === 'PB') {
+      const field = pendingType === 'PA' ? 'portA' : 'portB';
+      onChange({ ...schematic, [field]: pt });
+      if (!e.shiftKey) onPendingTypeChange(null);
+      return;
+    }
+
     // ── place a component ──
     if (pendingType && pendingType !== 'L') {
       const type = pendingType as ComponentType;
@@ -339,6 +469,15 @@ export default function EditorCanvas({
   const handlePinClick = useCallback((pt: GridPoint, e: React.MouseEvent) => {
     e.stopPropagation();
     if (dragState) return;
+
+    // ── place port marker on a wire junction ──
+    if (pendingType === 'PA' || pendingType === 'PB') {
+      const field = pendingType === 'PA' ? 'portA' : 'portB';
+      onChange({ ...schematic, [field]: pt });
+      if (!e.shiftKey) onPendingTypeChange(null);
+      return;
+    }
+
     if (wiringFrom) {
       if (!gridEq(wiringFrom, pt))
         onChange({ ...schematic, wires: [...schematic.wires, { id: uid(), from: wiringFrom, to: pt }] });
@@ -346,7 +485,7 @@ export default function EditorCanvas({
     } else {
       setWiringFrom(pt);
     }
-  }, [wiringFrom, dragState, schematic, onChange]);
+  }, [wiringFrom, dragState, pendingType, schematic, onChange, onPendingTypeChange]);
 
   const handlePinRightClick = useCallback((pt: GridPoint, e: React.MouseEvent) => {
     e.preventDefault();
@@ -667,8 +806,34 @@ export default function EditorCanvas({
 
         {/* ── Wires ──────────────────────────────────────────────────────── */}
         {wires.map(w => {
-          const vw = visualWireEnd(w);
-          const s1 = toScreen(vw.from), s2 = toScreen(vw.to);
+          const vw  = visualWireEnd(w);
+          const s1  = toScreen(vw.from), s2 = toScreen(vw.to);
+
+          if (animateMode && nodeHighlights && nodeVoltages) {
+            const nodeId    = nodeHighlights.get(gk(w.from)) ?? nodeHighlights.get(gk(w.to));
+            const v         = nodeId !== undefined ? nodeVoltages[nodeId] : (vMin + vMax) / 2;
+            const wColor    = voltageToColor(v, vMin, vMax);
+            const dir       = wireFlows.get(w.id) ?? 0;
+            const animName  = dir > 0 ? 'march-fwd' : dir < 0 ? 'march-rev' : 'march-fwd';
+            return (
+              <g key={w.id}>
+                {/* Base colored wire */}
+                <line x1={s1.x} y1={s1.y} x2={s2.x} y2={s2.y}
+                  stroke={wColor} strokeWidth={3.5} strokeLinecap="round"
+                  style={{ cursor: 'pointer' }}
+                  onClick={e => handleWireClick(w.id, e)}
+                />
+                {/* Animated flow dashes */}
+                <line x1={s1.x} y1={s1.y} x2={s2.x} y2={s2.y}
+                  stroke="white" strokeWidth={3.5} strokeLinecap="round"
+                  strokeDasharray="10 8"
+                  style={{ animation: `${animName} 0.7s linear infinite`, opacity: 0.55 }}
+                  pointerEvents="none"
+                />
+              </g>
+            );
+          }
+
           return (
             <line key={w.id} x1={s1.x} y1={s1.y} x2={s2.x} y2={s2.y}
               stroke="#475569" strokeWidth={2.5} strokeLinecap="round"
@@ -693,13 +858,20 @@ export default function EditorCanvas({
           const s = toScreen(pt);
           const isWiringAnchor = gridEq(wiringFrom, pt);
           const isGnd  = gridEq(groundPoint, pt);
-          const nodeId = showNodes ? nodeHighlights!.get(key) : undefined;
+          const nodeId = (showNodes || animateMode) ? nodeHighlights?.get(key) : undefined;
           const nodeColor = nodeId !== undefined ? NODE_COLORS[nodeId % NODE_COLORS.length] : undefined;
+          // Voltage-based color in animate mode
+          const animNodeColor = animateMode && nodeId !== undefined && nodeVoltages
+            ? voltageToColor(nodeVoltages[nodeId], vMin, vMax)
+            : undefined;
+          const dotFill   = isGnd ? '#16a34a' : isWiringAnchor ? WIRE_COLOR
+                          : animNodeColor ?? nodeColor ?? 'white';
+          const dotStroke = isWiringAnchor ? WIRE_COLOR : animNodeColor ?? nodeColor ?? '#64748b';
           return (
-            <circle key={`jn-${key}`} cx={s.x} cy={s.y} r={PIN_R}
-              fill={isGnd ? '#16a34a' : isWiringAnchor ? WIRE_COLOR : nodeColor ?? 'white'}
-              fillOpacity={nodeColor && !isGnd && !isWiringAnchor ? 0.3 : 1}
-              stroke={isWiringAnchor ? WIRE_COLOR : nodeColor ?? '#64748b'}
+            <circle key={`jn-${key}`} cx={s.x} cy={s.y} r={animateMode ? PIN_R + 1 : PIN_R}
+              fill={dotFill}
+              fillOpacity={nodeColor && !isGnd && !isWiringAnchor && !animateMode ? 0.3 : 1}
+              stroke={dotStroke}
               strokeWidth={isWiringAnchor || nodeColor ? 2 : 1.5}
               style={{ cursor: 'crosshair' }}
               onClick={e  => handlePinClick(pt, e)}
@@ -749,6 +921,59 @@ export default function EditorCanvas({
           );
         })}
 
+        {/* ── Port markers (Thévenin / Norton terminals) ─────────────────── */}
+        {([['portA', '#7c3aed', 'a'], ['portB', '#0369a1', 'b']] as const).map(([field, color, label]) => {
+          const pt = schematic[field];
+          if (!pt) return null;
+          const s = toScreen(pt);
+          const isActive = pendingType === (field === 'portA' ? 'PA' : 'PB');
+          return (
+            <g key={field}
+              style={{ cursor: 'pointer' }}
+              onContextMenu={e => {
+                e.preventDefault(); e.stopPropagation();
+                onChange({ ...schematic, [field]: null });
+              }}
+            >
+              {/* Connecting dot */}
+              <circle cx={s.x} cy={s.y} r={5} fill={color} stroke="white" strokeWidth={1.5} />
+              {/* Terminal arrow */}
+              <polygon
+                points={`${s.x+6},${s.y-7} ${s.x+16},${s.y} ${s.x+6},${s.y+7}`}
+                fill={color} opacity={0.9}
+              />
+              <rect x={s.x+16} y={s.y-9} width={14} height={18} rx={3}
+                fill={color} />
+              <text x={s.x+23} y={s.y+5}
+                textAnchor="middle" fontSize={11} fill="white" fontWeight="700"
+                fontFamily="'Courier New', monospace" pointerEvents="none"
+              >{label}</text>
+              {isActive && (
+                <circle cx={s.x} cy={s.y} r={10}
+                  fill="none" stroke={color} strokeWidth={2} strokeDasharray="4 3" opacity={0.7} />
+              )}
+            </g>
+          );
+        })}
+
+        {/* Port ghost preview */}
+        {(pendingType === 'PA' || pendingType === 'PB') && mouseGrid && (() => {
+          const s     = toScreen(mouseGrid);
+          const color = pendingType === 'PA' ? '#7c3aed' : '#0369a1';
+          const label = pendingType === 'PA' ? 'a' : 'b';
+          return (
+            <g opacity={0.5} pointerEvents="none">
+              <circle cx={s.x} cy={s.y} r={5} fill={color} stroke="white" strokeWidth={1.5} />
+              <polygon points={`${s.x+6},${s.y-7} ${s.x+16},${s.y} ${s.x+6},${s.y+7}`} fill={color} />
+              <rect x={s.x+16} y={s.y-9} width={14} height={18} rx={3} fill={color} />
+              <text x={s.x+23} y={s.y+5}
+                textAnchor="middle" fontSize={11} fill="white" fontWeight="700"
+                fontFamily="'Courier New', monospace"
+              >{label}</text>
+            </g>
+          );
+        })()}
+
         {/* ── Components ─────────────────────────────────────────────────── */}
         {components.map(c => {
           const isSelected  = c.id === selectedId;
@@ -777,6 +1002,24 @@ export default function EditorCanvas({
                     fill="none" stroke={SEL_COLOR} strokeWidth={1.5}
                     strokeDasharray="5 3" rx={4} />
                 )}
+                {/* Current direction arrow (animate mode) */}
+                {animateMode && c.type !== 'OC' && (() => {
+                  const I = componentCurrents.get(c.id) ?? 0;
+                  if (Math.abs(I) < 1e-12) return null;
+                  const fwd = I > 0;
+                  // Arrow centred on component body; points in ±x of local frame
+                  const ax = COMP_PX / 2;
+                  const pts = fwd
+                    ? `${ax+7},0 ${ax-3},-5 ${ax-3},5`
+                    : `${ax-7},0 ${ax+3},-5 ${ax+3},5`;
+                  return (
+                    <polygon points={pts}
+                      fill="#ff6b1a" stroke="white" strokeWidth={0.8}
+                      opacity={0.9} pointerEvents="none"
+                      style={{ animation: 'cur-pulse 1.1s ease-in-out infinite' }}
+                    />
+                  );
+                })()}
               </g>
 
               {/* Value label (skip for OC; dependent sources show their value w/o controlVar here) */}
@@ -811,17 +1054,6 @@ export default function EditorCanvas({
               {renderPinCircle(rPin1, c.pin1, color)}
               {renderPinCircle(rPin2, getPin2(c), color)}
 
-              {/* Control-port pin circles for G/E */}
-              {hasCtrlPins(c.type) && (() => {
-                const rCtrl1 = getCtrlPin1(rComp);
-                const rCtrl2 = getCtrlPin2(rComp);
-                return (
-                  <>
-                    {renderPinCircle(rCtrl1, getCtrlPin1(c), color)}
-                    {renderPinCircle(rCtrl2, getCtrlPin2(c), color)}
-                  </>
-                );
-              })()}
             </g>
           );
         })}
@@ -861,7 +1093,7 @@ export default function EditorCanvas({
                 >N{nodeId} · {label}</text>
               </g>
             ),
-          ].filter(Boolean) as JSX.Element[];
+          ].filter(Boolean) as React.JSX.Element[];
         })}
 
         {/* ── Placement ghost ────────────────────────────────────────────── */}
@@ -878,19 +1110,8 @@ export default function EditorCanvas({
               <g transform={`translate(${s.x},${s.y}) rotate(${pendingRot})`} style={{ color: SEL_COLOR }}>
                 <ComponentShape type={type} />
               </g>
-              {/* no controlVar ghost needed — user sets it after placement */}
               <circle cx={s.x}  cy={s.y}  r={PIN_R} fill="white" stroke={SEL_COLOR} strokeWidth={1.5} />
               <circle cx={s2.x} cy={s2.y} r={PIN_R} fill="white" stroke={SEL_COLOR} strokeWidth={1.5} />
-              {hasCtrlPins(type) && (() => {
-                const sc1 = toScreen(getCtrlPin1(gh));
-                const sc2 = toScreen(getCtrlPin2(gh));
-                return (
-                  <>
-                    <circle cx={sc1.x} cy={sc1.y} r={PIN_R} fill="white" stroke={SEL_COLOR} strokeWidth={1.5} />
-                    <circle cx={sc2.x} cy={sc2.y} r={PIN_R} fill="white" stroke={SEL_COLOR} strokeWidth={1.5} />
-                  </>
-                );
-              })()}
             </g>
           );
         })()}

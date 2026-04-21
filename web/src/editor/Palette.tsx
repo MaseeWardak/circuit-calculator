@@ -27,12 +27,16 @@ const ITEMS: PaletteItem[] = [
   { type: 'A',  label: 'Current Probe',  symbol: 'Ⓐ',  description: 'Ammeter — place in series, label it (e.g. i1), then reference it from CCCS/CCVS' },
   // ── Net label ────────────────────────────────────────────
   { type: 'L',  label: 'Net Label',      symbol: '🏷', description: 'Named net — two matching labels connect electrically' },
+  // ── Thévenin / Norton port markers ───────────────────────
+  { type: 'PA', label: 'Port A',         symbol: 'Ⓐ',  description: 'Mark a node as Thévenin/Norton terminal a — click a wire junction' },
+  { type: 'PB', label: 'Port B',         symbol: 'Ⓑ',  description: 'Mark a node as Thévenin/Norton terminal b — click a wire junction' },
 ];
 
 const GROUPS = [
   { title: 'Independent',  types: ['R', 'V', 'I'] as ToolType[] },
   { title: 'Dependent',    types: ['G', 'E', 'F', 'H'] as ToolType[] },
   { title: 'Utility',      types: ['OC', 'A', 'L'] as ToolType[] },
+  { title: 'Analysis',     types: ['PA', 'PB'] as ToolType[] },
 ];
 
 export default function Palette({ selected, onSelect }: Props) {
@@ -82,7 +86,11 @@ export default function Palette({ selected, onSelect }: Props) {
             <br/>
             <b>Current control (CCCS/CCVS):</b><br/>
             Place a <b>Current Probe (A)</b> in series and label it "i1".<br/>
-            Or label a resistor "i1" (I = V/R).
+            Or label a resistor "i1" (I = V/R).<br/>
+            <br/>
+            <b>Thévenin / Norton:</b><br/>
+            Place <b>Port A</b> and <b>Port B</b> on two circuit nodes,<br/>
+            then Solve — V_th, I_N and R_th appear in Results.
           </li>
         </ul>
       </div>
