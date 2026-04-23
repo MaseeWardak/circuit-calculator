@@ -361,8 +361,8 @@ export default function EditorCanvas({
           ...schematic,
           components: schematic.components.filter(c => c.id !== selectedId),
           wires: schematic.wires.filter(
-            w => !pinAt(w.from)?.componentId.startsWith(selectedId) &&
-                 !pinAt(w.to)?.componentId.startsWith(selectedId)
+            w => pinAt(w.from)?.componentId !== selectedId &&
+                 pinAt(w.to)?.componentId   !== selectedId
           ),
         });
         setSelectedId(null);
@@ -525,7 +525,7 @@ export default function EditorCanvas({
 
   const updateValue = (id: string, raw: string) => {
     const v = parseFloat(raw);
-    if (!isNaN(v) && v !== 0)
+    if (!isNaN(v))
       onChange({ ...schematic, components: schematic.components.map(c => c.id === id ? { ...c, value: v } : c) });
   };
 
@@ -721,8 +721,8 @@ export default function EditorCanvas({
                   ...schematic,
                   components: schematic.components.filter(x => x.id !== c.id),
                   wires: schematic.wires.filter(
-                    w => !pinAt(w.from)?.componentId.startsWith(c.id) &&
-                         !pinAt(w.to)?.componentId.startsWith(c.id)
+                    w => pinAt(w.from)?.componentId !== c.id &&
+                         pinAt(w.to)?.componentId   !== c.id
                   ),
                 });
                 setSelectedId(null);
@@ -1097,7 +1097,7 @@ export default function EditorCanvas({
         })}
 
         {/* ── Placement ghost ────────────────────────────────────────────── */}
-        {pendingType && pendingType !== 'L' && mouseGrid && (() => {
+        {pendingType && pendingType !== 'L' && pendingType !== 'PA' && pendingType !== 'PB' && mouseGrid && (() => {
           const type  = pendingType as ComponentType;
           const s     = toScreen(mouseGrid);
           const gh: PlacedComponent = {

@@ -42,6 +42,14 @@ function fmtZ(r: number): string {
   return r.toPrecision(4) + ' Ω';
 }
 function fmtSign(v: number): string { return v < 0 ? '−' : '+'; }
+function fmtP(w: number): string {
+  const abs = Math.abs(w);
+  if (abs === 0)    return '0 W';
+  if (abs >= 1e3)   return (w / 1e3).toPrecision(4) + ' kW';
+  if (abs >= 1)     return w.toPrecision(4) + ' W';
+  if (abs >= 1e-3)  return (w * 1e3).toPrecision(4) + ' mW';
+  return                   (w * 1e6).toPrecision(4) + ' µW';
+}
 
 const CIRCLED = ['①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩','⑪','⑫'];
 function circled(i: number): string { return CIRCLED[i] ?? `(${i + 1})`; }
@@ -83,6 +91,14 @@ export function generateSolutionSteps(
   const { branches, node_count } = input;
   const V  = solved.node_voltages;
   const IC = solved.branch_currents;
+
+  // Map from VS ordinal (vs_ctrl_idx) → branch index in IC array.
+  // Needed for CCCS/CCVS which store vs_ctrl_idx, not a direct IC index.
+  const vsIdxToBranchIdx = new Map<number, number>();
+  let vsOrdinal = 0;
+  branches.forEach((br, i) => {
+    if (br.type === 'V') vsIdxToBranchIdx.set(vsOrdinal++, i);
+  });
 
   const sections: SolutionSection[] = [];
   const T = (text: string): StepLine => ({ kind: 'text', text });
@@ -296,12 +312,14 @@ export function generateSolutionSteps(
         lines.push(O(`  I = ${fmtA(cur)}`));
 
       } else if (br.type === 'F') {
-        const I_ctrl = IC[br.vs_ctrl_idx!];
+        const ctrlBranchIdx = vsIdxToBranchIdx.get(br.vs_ctrl_idx!);
+        const I_ctrl = ctrlBranchIdx !== undefined ? IC[ctrlBranchIdx] : 0;
         lines.push(E(`  I = β · I_ctrl = ${br.value} × ${fmtA(I_ctrl)}`));
         lines.push(O(`    = ${fmtA(cur)}`));
 
       } else if (br.type === 'H') {
-        const I_ctrl = IC[br.vs_ctrl_idx!];
+        const ctrlBranchIdx = vsIdxToBranchIdx.get(br.vs_ctrl_idx!);
+        const I_ctrl = ctrlBranchIdx !== undefined ? IC[ctrlBranchIdx] : 0;
         lines.push(E(`  V_out = rm · I_ctrl = ${br.value} Ω × ${fmtA(I_ctrl)}`));
         lines.push(T('  I is MNA extra unknown.'));
         lines.push(O(`  I = ${fmtA(cur)}`));
@@ -335,13 +353,13 @@ export function generateSolutionSteps(
       //   P_delivered = Vs * I_vs (if both positive, VS delivers power)
       const P = Vdiff * (isVsLike(br.type) ? -cur : cur);
       const name = `${circled(i)} ${elementName(dt).padEnd(10)}`;
-      const pStr = `P = ${fmtV(Vdiff)} × ${fmtA(isVsLike(br.type) ? -cur : cur)} = ${(Math.abs(P) >= 1e-3 ? P.toPrecision(4) : (P * 1e3).toPrecision(4) + ' m') + 'W'}`;
+      const pStr = `P = ${fmtV(Vdiff)} × ${fmtA(isVsLike(br.type) ? -cur : cur)} = ${fmtP(P)}`;
 
       if (P < -1e-14) {
-        lines.push(E(`  ${name}  ${pStr}  [delivers ${Math.abs(P * 1e3).toPrecision(4)} mW]`));
+        lines.push(E(`  ${name}  ${pStr}  [delivers ${fmtP(Math.abs(P))}]`));
         totalDelivered += Math.abs(P);
       } else if (P > 1e-14) {
-        lines.push(E(`  ${name}  ${pStr}  [absorbs  ${(P * 1e3).toPrecision(4)} mW]`));
+        lines.push(E(`  ${name}  ${pStr}  [absorbs  ${fmtP(P)}]`));
         totalAbsorbed += P;
       } else {
         lines.push(E(`  ${name}  P ≈ 0 W`));
@@ -352,11 +370,11 @@ export function generateSolutionSteps(
       lines.push(S());
       const diff = Math.abs(totalDelivered - totalAbsorbed);
       const ok   = diff < 1e-8 * (1 + totalDelivered);
-      lines.push(T(`  Delivered: ${(totalDelivered * 1e3).toPrecision(4)} mW`));
-      lines.push(T(`  Absorbed:  ${(totalAbsorbed  * 1e3).toPrecision(4)} mW`));
+      lines.push(T(`  Delivered: ${fmtP(totalDelivered)}`));
+      lines.push(T(`  Absorbed:  ${fmtP(totalAbsorbed)}`));
       lines.push(ok
         ? O('  Power balance ✓  (delivered = absorbed)')
-        : W(`  Power imbalance: ${(diff * 1e3).toPrecision(3)} mW (numerical residual)`)
+        : W(`  Power imbalance: ${fmtP(diff)} (numerical residual)`)
       );
     }
 
